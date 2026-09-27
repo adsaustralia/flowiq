@@ -7093,7 +7093,6 @@ export function QuoteBuilderScreen({
                         />
                       </div>
                       <p className="mt-2 text-[11px] font-medium text-slate-300">{submitProgress.label || 'Preparing PrintIQ submission'}</p>
-                      <p className="mt-1 text-[10px] text-slate-400">Progress reflects completed steps; large attachments may take longer.</p>
                     </div>
                   ) : null}
                   <div className={cn('mt-5 grid gap-1.5', isSuperAdmin ? 'grid-cols-4' : 'grid-cols-3')}>
