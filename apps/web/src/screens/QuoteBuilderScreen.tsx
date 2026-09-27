@@ -1,3 +1,4 @@
+import { loadArtworkExportPreview, prepareArtworkExportPreviews } from '../services/artworkExportPreview';
 import { shippingLinesWithCreatives } from '../services/shippingCreatives';
 import { Fragment, type Dispatch, type DragEvent, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, CircleAlert, Download, Eye, GripVertical, LayoutGrid, LoaderCircle, Maximize2, Pencil, Plus, Search, Table2, Trash2, Upload, X } from 'lucide-react';
@@ -819,12 +820,15 @@ function stripSharedFormulaClones(workbook: any) {
   });
 }
 
-async function pdfFirstPageToDataUrl(blob: Blob, maxWidth = 560) {
+async function pdfFirstPageToDataUrl(blob: Blob, maxWidth = 560, signal?: AbortSignal) {
   const pdfjs = await loadPdfJsRuntime();
 
   const objectUrl = URL.createObjectURL(blob);
   const loadingTask = pdfjs.getDocument({ url: objectUrl });
+  const cancel = () => { void loadingTask.destroy().catch(() => {}); };
+  signal?.addEventListener('abort', cancel, { once: true });
   try {
+    signal?.throwIfAborted();
     const pdf = await loadingTask.promise;
     const page = await pdf.getPage(1);
     const initialViewport = page.getViewport({ scale: 1 });
@@ -838,6 +842,7 @@ async function pdfFirstPageToDataUrl(blob: Blob, maxWidth = 560) {
     await page.render({ canvas, viewport, intent: 'print' }).promise;
     return canvas.toDataURL('image/png');
   } finally {
+    signal?.removeEventListener('abort', cancel);
     try {
       await loadingTask.destroy();
     } finally {
@@ -4480,87 +4485,38 @@ export function QuoteBuilderScreen({
         if (mime.includes('jpg') || mime.includes('jpeg') || lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) return 'jpg';
         return 'png';
       };
-      const normalizePreviewBlobForWord = async (
-        previewBlob: Blob,
-        mimeType: string,
-        fileName: string,
-      ): Promise<{ bytes: Uint8Array; extension: 'png' | 'jpg' }> => {
-        const resolvedMime = (previewBlob.type || mimeType || '').toLowerCase();
-        const isWordSafeRaster = resolvedMime.includes('png') || resolvedMime.includes('jpg') || resolvedMime.includes('jpeg');
-        if (isWordSafeRaster) {
-          const bytes = new Uint8Array(await previewBlob.arrayBuffer());
-          return {
-            bytes,
-            extension: detectImageExtension(resolvedMime, fileName),
-          };
-        }
-
-        const bitmap = await createImageBitmap(previewBlob);
-        try {
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.max(1, Math.ceil(bitmap.width));
-          canvas.height = Math.max(1, Math.ceil(bitmap.height));
-          const context = canvas.getContext('2d');
-          if (!context) {
-            throw new Error('Unable to prepare artwork thumbnail preview');
-          }
-          context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-          const pngBlob = await canvasToBlob(canvas, 'image/png');
-          const pngBytes = new Uint8Array(await pngBlob.arrayBuffer());
-          return {
-            bytes: pngBytes,
-            extension: 'png',
-          };
-        } finally {
-          bitmap.close();
-        }
-      };
-
-      if (shouldGenerateExcel || (exportMode === 'pdf' && purpose === 'visuals')) {
+      if (exportMode === 'pdf' && purpose === 'visuals') {
+        const imageIds = Array.from(requiredCreativeImageIds);
+        setExportProgressMessage(`Preparing artwork previews: 0 of ${imageIds.length}`);
+        await prepareArtworkExportPreviews(imageIds, async (imageId) => {
+          const image = imageRecordById.get(imageId);
+          if (!image) throw new Error(`Artwork ${imageId} is missing from the campaign.`);
+          const dataUrl = await loadArtworkExportPreview(
+            image,
+            (url) => withCampaignImageProxy(toAbsoluteUrl(buildApiUrl(url))),
+            pdfFirstPageToDataUrl,
+          );
+          const parsed = dataUrlToBytes(dataUrl);
+          if (!parsed) throw new Error(`Unable to prepare preview for ${image.fileName}.`);
+          creativePreviewById.set(imageId, parsed);
+        }, (completed, total) => setExportProgressMessage(`Preparing artwork previews: ${completed} of ${total}`));
+      } else if (shouldGenerateExcel) {
         setExportProgressMessage('Preparing artwork previews...');
-        await Promise.all(
-          Array.from(requiredCreativeImageIds).map(async (imageId) => {
-            const image = imageRecordById.get(imageId);
-            if (!image?.imageUrl) return;
-            const mimeType = (image.mimeType || '').toLowerCase();
-            const isPdf = mimeType === 'application/pdf' || image.fileName.toLowerCase().endsWith('.pdf');
-            const isImage = mimeType.startsWith('image/');
-            try {
-              const sourceUrl = withCampaignImageProxy(toAbsoluteUrl(buildApiUrl(image.imageUrl)));
-              if (!sourceUrl) return;
-              const response = await fetch(sourceUrl);
-              if (!response.ok) return;
-              const blob = await response.blob();
-
-              if (shouldGenerateExcel && (isPdf || isImage)) {
-                const dataUrl = isPdf ? await pdfFirstPageToDataUrl(blob, 420) : await blobToDataUrl(blob);
-                if (dataUrl) creativeImageDataUrlById.set(imageId, dataUrl);
-              }
-
-              if (exportMode === 'pdf') {
-                if (isPdf) {
-                  const previewDataUrl = await pdfFirstPageToDataUrl(blob, 560);
-                  const parsed = previewDataUrl ? dataUrlToBytes(previewDataUrl) : null;
-                  if (parsed) creativePreviewById.set(imageId, parsed);
-                } else if (isImage) {
-                  const previewUrl = (image.previewUrl || image.imageUrl)
-                    ? withCampaignImageProxy(toAbsoluteUrl(buildApiUrl(image.previewUrl || image.imageUrl || '')))
-                    : '';
-                  const previewResponse = previewUrl ? await fetch(previewUrl) : response;
-                  const previewBlob = previewResponse.ok ? await previewResponse.blob() : blob;
-                  const normalizedPreview = await normalizePreviewBlobForWord(
-                    previewBlob,
-                    mimeType,
-                    image.thumbnailFileName || image.fileName || image.name || '',
-                  );
-                  creativePreviewById.set(imageId, normalizedPreview);
-                }
-              }
-            } catch {
-              // Skip image embedding when image fetch fails.
-            }
-          }),
-        );
+        await Promise.all(Array.from(requiredCreativeImageIds).map(async (imageId) => {
+          const image = imageRecordById.get(imageId);
+          if (!image?.imageUrl) return;
+          const mimeType = (image.mimeType || '').toLowerCase();
+          const isPdf = mimeType === 'application/pdf' || image.fileName.toLowerCase().endsWith('.pdf');
+          try {
+            const response = await fetch(withCampaignImageProxy(toAbsoluteUrl(buildApiUrl(image.imageUrl))));
+            if (!response.ok) return;
+            const blob = await response.blob();
+            const dataUrl = isPdf ? await pdfFirstPageToDataUrl(blob, 420) : await blobToDataUrl(blob);
+            if (dataUrl) creativeImageDataUrlById.set(imageId, dataUrl);
+          } catch {
+            // Preserve the existing optional image behavior for Excel exports.
+          }
+        }));
       }
       const fillWordDocument = async (): Promise<GeneratedVisualExportFile> => {
         setExportProgressMessage('Generating PDF document...');
