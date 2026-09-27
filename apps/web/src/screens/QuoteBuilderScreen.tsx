@@ -823,8 +823,8 @@ async function pdfFirstPageToDataUrl(blob: Blob, maxWidth = 560) {
   const pdfjs = await loadPdfJsRuntime();
 
   const objectUrl = URL.createObjectURL(blob);
+  const loadingTask = pdfjs.getDocument({ url: objectUrl });
   try {
-    const loadingTask = pdfjs.getDocument({ url: objectUrl });
     const pdf = await loadingTask.promise;
     const page = await pdf.getPage(1);
     const initialViewport = page.getViewport({ scale: 1 });
@@ -833,10 +833,16 @@ async function pdfFirstPageToDataUrl(blob: Blob, maxWidth = 560) {
     const canvas = document.createElement('canvas');
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
-    await page.render({ canvas, viewport }).promise;
+    // Exports also run in a hidden iframe, where animation frames are paused.
+    // Print intent makes PDF.js render without requestAnimationFrame scheduling.
+    await page.render({ canvas, viewport, intent: 'print' }).promise;
     return canvas.toDataURL('image/png');
   } finally {
-    URL.revokeObjectURL(objectUrl);
+    try {
+      await loadingTask.destroy();
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
   }
 }
 
@@ -5909,6 +5915,15 @@ export function QuoteBuilderScreen({
       setExportingTemplates(false);
     }
   }
+
+  useEffect(() => {
+    if (!printIQVisualsRequestId) return;
+    window.parent.postMessage({
+      type: 'flowiq:printiq-visuals-progress',
+      requestId: printIQVisualsRequestId,
+      phase: exportProgressMessage || 'loading campaign data and export settings',
+    }, window.location.origin);
+  }, [printIQVisualsRequestId, exportProgressMessage]);
 
   useEffect(() => {
     if (!printIQVisualsRequestId || autoDownloadTriggeredRef.current) return;

@@ -7,6 +7,7 @@ export function generatePrintIQVisuals(campaignId: string, tenantId?: string | n
     const frame = document.createElement('iframe');
     frame.hidden = true;
     frame.title = 'Preparing campaign visuals';
+    let phase = 'loading the campaign export';
     const url = new URL(window.location.pathname, window.location.origin);
     url.searchParams.set('view', 'quote');
     url.searchParams.set('campaignId', campaignId);
@@ -19,7 +20,12 @@ export function generatePrintIQVisuals(campaignId: string, tenantId?: string | n
     };
     const receive = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.source !== frame.contentWindow) return;
-      if (event.data?.type !== VISUALS_RESULT_EVENT || event.data.requestId !== requestId) return;
+      if (event.data?.requestId !== requestId) return;
+      if (event.data.type === 'flowiq:printiq-visuals-progress') {
+        if (typeof event.data.phase === 'string') phase = event.data.phase;
+        return;
+      }
+      if (event.data.type !== VISUALS_RESULT_EVENT) return;
       cleanup();
       if (event.data.file instanceof Blob && event.data.file.type === 'application/pdf') {
         resolve(new File([event.data.file], event.data.fileName || 'Campaign Visuals.pdf', { type: 'application/pdf' }));
@@ -29,7 +35,7 @@ export function generatePrintIQVisuals(campaignId: string, tenantId?: string | n
     };
     const timeout = window.setTimeout(() => {
       cleanup();
-      reject(new Error('Preparing the Visuals PDF timed out. Please try again.'));
+      reject(new Error(`Preparing the Visuals PDF timed out while ${phase}. No PrintIQ submission was sent by this attempt.`));
     }, 180_000);
     window.addEventListener('message', receive);
     frame.src = url.toString();
