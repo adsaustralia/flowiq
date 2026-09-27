@@ -3,18 +3,25 @@ type ArtworkPreviewSource = { name?: string; fileName: string; imageUrl?: string
 // Use the small, pre-generated image before considering the print-size original.
 export async function loadArtworkExportPreview(
   image: ArtworkPreviewSource,
-  resolveUrl: (url: string) => string,
+  resolveUrl: (url: string) => string | string[],
   renderPdf: (blob: Blob, width: number, signal: AbortSignal) => Promise<string>,
   sourceTimeoutMs = 15_000,
 ): Promise<string> {
   const name = image.fileName || image.name || 'Artwork';
-  const sources = [
+  const logicalSources = [
     { kind: 'preview', url: image.previewUrl },
     { kind: 'thumbnail', url: image.thumbnailUrl },
     { kind: 'original', url: image.imageUrl },
   ].filter((source, index, all): source is { kind: string; url: string } =>
     Boolean(source.url) && all.findIndex((candidate) => candidate.url === source.url) === index,
   );
+  const sources = logicalSources.flatMap((source) => {
+    const resolved = resolveUrl(source.url);
+    return (Array.isArray(resolved) ? resolved : [resolved]).map((url, index) => ({
+      kind: index === 0 ? source.kind : `${source.kind} fallback`,
+      url,
+    }));
+  }).filter((source, index, all) => source.url && all.findIndex((candidate) => candidate.url === source.url) === index);
   let lastError = 'No artwork URL';
   for (const source of sources) {
     const controller = new AbortController();
@@ -30,7 +37,7 @@ export async function loadArtworkExportPreview(
       try {
         const prepareSource = async () => {
           phase = `downloading ${source.kind}`;
-          const response = await fetch(resolveUrl(source.url), { signal: controller.signal });
+          const response = await fetch(source.url, { signal: controller.signal });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const blob = await response.blob();
           controller.signal.throwIfAborted();

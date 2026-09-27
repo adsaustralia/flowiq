@@ -787,6 +787,20 @@ function withCampaignImageProxy(url: string) {
   }
 }
 
+function campaignImageFetchCandidates(url: string) {
+  const proxyUrl = withCampaignImageProxy(url);
+  try {
+    const parsed = new URL(url, window.location.origin);
+    const prefix = '/api/campaign-images/';
+    if (!parsed.pathname.startsWith(prefix)) return [proxyUrl];
+    const storedName = parsed.pathname.slice(prefix.length);
+    if (!storedName || storedName.includes('/')) return [proxyUrl];
+    return [new URL(`/campaign-artwork-cdn/${storedName}`, window.location.origin).toString(), proxyUrl];
+  } catch {
+    return [proxyUrl];
+  }
+}
+
 function detectStateMarkerColumns(sheet: any, headerRow: number, fromColumn: number, toColumn: number) {
   const markerColumnByState = new Map<ExportState, number>();
   for (let col = fromColumn; col <= toColumn; col += 1) {
@@ -4493,7 +4507,7 @@ export function QuoteBuilderScreen({
           if (!image) throw new Error(`Artwork ${imageId} is missing from the campaign.`);
           const dataUrl = await loadArtworkExportPreview(
             image,
-            (url) => withCampaignImageProxy(toAbsoluteUrl(buildApiUrl(url))),
+            (url) => campaignImageFetchCandidates(toAbsoluteUrl(buildApiUrl(url))),
             pdfFirstPageToDataUrl,
           );
           const parsed = dataUrlToBytes(dataUrl);

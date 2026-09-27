@@ -43,6 +43,13 @@ test('missing preview falls back to thumbnail before original', async () => {
   assert.deepEqual(urls, ['/small.webp', '/thumb.webp']);
 });
 
+test('uses the API candidate when the same-origin CDN route is unavailable', async () => {
+  const urls = [];
+  const api = setup(async url => { urls.push(url); return url === '/cdn/small.webp' ? { ok: false, status: 404 } : ok; });
+  await api.loadArtworkExportPreview(image, url => [`/cdn${url}`, `/api${url}`], () => assert.fail());
+  assert.deepEqual(urls, ['/cdn/small.webp', '/api/small.webp']);
+});
+
 test('PDF original without stored previews uses the PDF fallback', async () => {
   const api = setup(async () => ({ ok: true, blob: async () => ({ type: 'application/pdf' }) }));
   let calls = 0;

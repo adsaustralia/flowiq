@@ -19,6 +19,14 @@ adsconnect.com.au, www.adsconnect.com.au {
     file_server
   }
 
+  # Serve public campaign artwork through the CDN while keeping a same-origin
+  # URL for browser canvas/PDF generation. This bypasses the slower API relay.
+  handle_path /campaign-artwork-cdn/* {
+    reverse_proxy https://adsartwork.syd1.cdn.digitaloceanspaces.com {
+      header_up Host adsartwork.syd1.cdn.digitaloceanspaces.com
+    }
+  }
+
   @api path /api/*
   handle @api {
     reverse_proxy api:4000
