@@ -68,15 +68,6 @@ type AutomatedQuoteAction = 'download-visuals' | 'download-installs' | 'send-ema
 type AutomatedQuoteActionStatus = 'success' | 'error';
 type UploadedPurchaseOrder = NonNullable<CampaignRecord['purchaseOrder']>;
 
-const submitProgressStages = [
-  { progress: 12, label: 'Saving campaign' },
-  { progress: 28, label: 'Creating PrintIQ quote' },
-  { progress: 46, label: 'Adding PrintIQ jobs' },
-  { progress: 62, label: 'Setting proof contact' },
-  { progress: 78, label: 'Accepting quote' },
-  { progress: 90, label: 'Uploading artwork' },
-] as const;
-
 function parseVisualsExportMode(value: string | undefined): VisualsExportMode {
   const normalized = (value || '').trim().toLowerCase();
   return ['1', 'true', 'yes', 'on'].includes(normalized) ? 'excel' : 'pdf';
@@ -1413,31 +1404,6 @@ export function QuoteBuilderScreen({
   const isReadOnlyExportAutomation = autoDownloadVisuals || autoDownloadInstalls || Boolean(printIQVisualsRequestId);
   const isSuperAdmin = session?.user.role === 'super_admin';
   const isPrintIQSubmitting = submitting || testSubmitting;
-
-  useEffect(() => {
-    if (!isPrintIQSubmitting) {
-      setSubmitProgress({ progress: 0, label: '' });
-      return;
-    }
-
-    let stageIndex = 0;
-    setSubmitProgress(submitProgressStages[stageIndex]);
-    const timer = window.setInterval(() => {
-      stageIndex = Math.min(stageIndex + 1, submitProgressStages.length - 1);
-      setSubmitProgress((current) => {
-        const nextStage = submitProgressStages[stageIndex];
-        if (current.progress >= nextStage.progress) {
-          return {
-            progress: Math.min(96, current.progress + 1),
-            label: nextStage.label,
-          };
-        }
-        return nextStage;
-      });
-    }, 1800);
-
-    return () => window.clearInterval(timer);
-  }, [isPrintIQSubmitting]);
 
   function reportQuoteAutomationResult(action: AutomatedQuoteAction, status: AutomatedQuoteActionStatus, message?: string) {
     if (typeof window === 'undefined') return;
@@ -3683,11 +3649,18 @@ export function QuoteBuilderScreen({
     setError('');
     setQuoteResponseMessage('');
     setQuoteResponseStatus('success');
+    setSubmitProgress({ progress: 0, label: 'Saving campaign' });
 
     try {
       const savedCampaignId = isSubmittedCampaign ? campaignId : await saveCampaignDraft();
       if (!savedCampaignId) return;
-      const response = await submitCampaignToPrintIQ(savedCampaignId, effectiveTenantId, { test: isTestSubmission });
+      const response = await submitCampaignToPrintIQ(savedCampaignId, effectiveTenantId, {
+        test: isTestSubmission,
+        onProgress: (next) => setSubmitProgress((current) => ({
+          progress: Math.max(current.progress, next.progress),
+          label: next.label,
+        })),
+      });
       const jobNumbers = response.jobNos?.length ? response.jobNos.join(', ') : response.jobNo;
       const quoteNumbers = response.quoteNos?.length ? response.quoteNos.join(', ') : response.quoteNo;
       const printIQNumbers = [quoteNumbers ? `Quote${(response.quoteNos?.length ?? 0) > 1 ? 's' : ''}: ${quoteNumbers}` : '', jobNumbers ? `Jobs: ${jobNumbers}` : ''].filter(Boolean).join(', ');
@@ -7128,13 +7101,14 @@ export function QuoteBuilderScreen({
                         <span>{testSubmitting ? 'Testing PrintIQ order' : 'Submitting PrintIQ order'}</span>
                         <span>{Math.round(submitProgress.progress)}%</span>
                       </div>
-                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-950/80 ring-1 ring-white/10">
+                      <div role="progressbar" aria-label="PrintIQ submission progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={submitProgress.progress} aria-valuetext={submitProgress.label} className="mt-2 h-2 overflow-hidden rounded-full bg-slate-950/80 ring-1 ring-white/10">
                         <div
                           className="h-full rounded-full bg-gradient-to-r from-violet-400 via-fuchsia-400 to-amber-300 transition-[width] duration-700 ease-out"
-                          style={{ width: `${Math.max(8, submitProgress.progress)}%` }}
+                          style={{ width: `${submitProgress.progress}%` }}
                         />
                       </div>
                       <p className="mt-2 text-[11px] font-medium text-slate-300">{submitProgress.label || 'Preparing PrintIQ submission'}</p>
+                      <p className="mt-1 text-[10px] text-slate-400">Progress reflects completed steps; large attachments may take longer.</p>
                     </div>
                   ) : null}
                   <div className={cn('mt-5 grid gap-1.5', isSuperAdmin ? 'grid-cols-4' : 'grid-cols-3')}>

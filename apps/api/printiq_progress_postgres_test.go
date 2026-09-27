@@ -90,6 +90,26 @@ func TestPrintIQProgressPostgres(t *testing.T) {
 	if err := journal.save(); err != nil {
 		t.Fatal(err)
 	}
+	// Progress is visible to normal campaign users but exposes no recovery payloads.
+	for _, foreignTenant := range []bool{false, true} {
+		actor := *user
+		if foreignTenant {
+			other := uuid.NewString()
+			actor.TenantID = &other
+		}
+		r := httptest.NewRequest("GET", "/", nil)
+		r.SetPathValue("campaignId", campaign.ID)
+		r = r.WithContext(context.WithValue(r.Context(), authUserKey, actor))
+		w := httptest.NewRecorder()
+		a.handleSubmissionProgress(w, r)
+		if foreignTenant {
+			if w.Code != 404 {
+				t.Fatalf("cross-tenant progress exposed: %d", w.Code)
+			}
+		} else if w.Code != 200 || strings.Contains(w.Body.String(), "Q1") || strings.Contains(w.Body.String(), "J1") || strings.Contains(w.Body.String(), "Payload") || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("unsafe progress response: %d %s", w.Code, w.Body.String())
+		}
+	}
 	resolve := func(role, tenantID string) int {
 		actor := *user
 		actor.Role = role

@@ -39,8 +39,66 @@ func TestPrintIQJournalResumeAfterRestart(t *testing.T) {
 			t.Fatal("resume failed")
 		}
 	}
-	if calls["J1"] != 1 || calls["J2"] != 2 || calls["J3"] != 1 {
+	if calls["J1"] != 1 || calls["J2"] != 3 || calls["J3"] != 1 {
 		t.Fatalf("replayed successful uploads: %v", calls)
+	}
+}
+
+func TestPrintIQAutomaticUploadRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name, step, message string
+		recover             bool
+		calls               int
+	}{
+		{"recovers", "UploadArtworkURL", "Artwork rejected", true, 2},
+		{"stops after one retry", "UploadArtworkURL", "Artwork rejected", false, 2},
+		{"application timeout", "UploadArtworkURL", "The operation has timed out", false, 1},
+		{"network error", "UploadArtworkURL", "", false, 1},
+		{"quote creation", "CreateQuoteWithDelivery", "Rejected", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls, waits := 0, 0
+			j := &printIQJournal{Steps: map[string]*printIQSavedStep{}, save: func() error { return nil }, waitRetry: func() error { waits++; return nil }}
+			_, failure := j.run("Sydney:0", tc.step, map[string]any{"JobNo": "J1"}, func() (any, *printIQSubmissionFailure) {
+				calls++
+				if tc.recover && calls == 2 {
+					return map[string]any{"IsError": false}, nil
+				}
+				body := map[string]any{"error": "Failed"}
+				if tc.message != "" {
+					body["printIqMessage"] = tc.message
+				}
+				return nil, &printIQSubmissionFailure{Status: 400, Body: body}
+			})
+			if calls != tc.calls || waits != tc.calls-1 || (failure == nil) != tc.recover {
+				t.Fatalf("calls=%d waits=%d failure=%v", calls, waits, failure)
+			}
+			if tc.recover {
+				j.run("Sydney:0", tc.step, map[string]any{"JobNo": "J1"}, func() (any, *printIQSubmissionFailure) { t.Fatal("successful retry replayed"); return nil, nil })
+			}
+		})
+	}
+}
+
+func TestPrintIQAutomaticRetryStopsOnCancellationOrPersistenceFailure(t *testing.T) {
+	for _, cancel := range []bool{false, true} {
+		calls, saves := 0, 0
+		j := &printIQJournal{Steps: map[string]*printIQSavedStep{}}
+		j.save = func() error {
+			saves++
+			if !cancel && saves == 3 {
+				return errors.New("database unavailable")
+			}
+			return nil
+		}
+		j.waitRetry = func() error { return errors.New("request cancelled") }
+		_, failure := j.run("Sydney:0", "UploadArtworkURL", map[string]any{}, func() (any, *printIQSubmissionFailure) {
+			calls++
+			return nil, &printIQSubmissionFailure{Status: 400, Body: map[string]any{"printIqMessage": "Rejected"}}
+		})
+		if calls != 1 || failure == nil {
+			t.Fatalf("unsafe retry: %d %v", calls, failure)
+		}
 	}
 }
 

@@ -15,11 +15,12 @@ import (
 )
 
 type printIQSavedStep struct {
-	Name     string
-	Payload  string
-	State    string
-	Response any
-	Failure  *printIQSubmissionFailure
+	Name      string
+	Payload   string
+	State     string
+	Response  any
+	Failure   *printIQSubmissionFailure
+	AutoRetry bool
 }
 
 type printIQJournal struct {
@@ -33,9 +34,11 @@ type printIQJournal struct {
 	Visuals       *printIQArtworkUpload
 	Artworks      map[string]*printIQArtworkUpload
 	Steps         map[string]*printIQSavedStep
+	CurrentStep   string
 	Resolutions   []printIQUploadResolution
 	save          func() error
 	wait          func() error
+	waitRetry     func() error
 }
 
 func progressFailure(message string) *printIQSubmissionFailure {
@@ -43,6 +46,26 @@ func progressFailure(message string) *printIQSubmissionFailure {
 }
 
 func (j *printIQJournal) run(key, step string, payload any, call func() (any, *printIQSubmissionFailure)) (any, *printIQSubmissionFailure) {
+	response, failure := j.runOnce(key, step, payload, call, false)
+	saved := j.Steps[key]
+	// Retry only a durably recorded, explicit upload rejection. Unknown outcomes,
+	// persistence failures and all quote/job operations must never be replayed.
+	if step != "UploadArtworkURL" || failure == nil || saved == nil || saved.State != "failed" || saved.Failure != failure {
+		return response, failure
+	}
+	saved.AutoRetry = true
+	if err := j.save(); err != nil {
+		return nil, progressFailure("Unable to save upload retry progress; no retry was sent")
+	}
+	if j.waitRetry != nil {
+		if err := j.waitRetry(); err != nil {
+			return nil, progressFailure("Submission interrupted before automatic retry; completed steps are saved")
+		}
+	}
+	return j.runOnce(key, step, payload, call, true)
+}
+
+func (j *printIQJournal) runOnce(key, step string, payload any, call func() (any, *printIQSubmissionFailure), autoRetry bool) (any, *printIQSubmissionFailure) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, progressFailure("Unable to encode submission progress")
@@ -68,8 +91,9 @@ func (j *printIQJournal) run(key, step string, payload any, call func() (any, *p
 			return nil, progressFailure("Submission interrupted; completed steps are saved")
 		}
 	}
-	saved := &printIQSavedStep{Name: step, Payload: string(encoded), State: "pending"}
+	saved := &printIQSavedStep{Name: step, Payload: string(encoded), State: "pending", AutoRetry: autoRetry}
 	j.Steps[key] = saved
+	j.CurrentStep = key
 	if err := j.save(); err != nil {
 		return nil, progressFailure("Unable to save submission progress; no further PrintIQ request was sent")
 	}
@@ -132,8 +156,8 @@ func (a *app) bindPrintIQJournal(requestContext context.Context, j *printIQJourn
 		}
 		return err
 	}
-	j.wait = func() error {
-		timer := time.NewTimer(time.Second)
+	waitFor := func(delay time.Duration) error {
+		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
 		case <-requestContext.Done():
@@ -142,6 +166,8 @@ func (a *app) bindPrintIQJournal(requestContext context.Context, j *printIQJourn
 			return nil
 		}
 	}
+	j.wait = func() error { return waitFor(time.Second) }
+	j.waitRetry = func() error { return waitFor(2 * time.Second) }
 }
 
 func (a *app) createPrintIQJournal(ctx context.Context, campaign *campaignRecord, j *printIQJournal) error {

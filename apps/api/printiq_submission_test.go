@@ -16,7 +16,7 @@ func TestSubmitPrintIQMarketsRoutesQuotesDatesAndAttachments(t *testing.T) {
 	quoteNo := ""
 	uploads := map[string][]string{}
 	accepts := 0
-	failUpload := true
+	failedUploadsRemaining := 2
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var p map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -75,8 +75,8 @@ func TestSubmitPrintIQMarketsRoutesQuotesDatesAndAttachments(t *testing.T) {
 				t.Errorf("attachment sent to wrong job: %#v", p)
 			}
 			uploads[job] = append(uploads[job], printIQStringValue(p["ArtworkUrl"]))
-			if job == "Q1-J1" && strings.HasSuffix(printIQStringValue(p["ArtworkUrl"]), "/po") && failUpload {
-				failUpload = false
+			if job == "Q1-J1" && strings.HasSuffix(printIQStringValue(p["ArtworkUrl"]), "/po") && failedUploadsRemaining > 0 {
+				failedUploadsRemaining--
 				response = map[string]any{"IsError": true, "ErrorMessage": "Artwork rejected"}
 			}
 
@@ -96,7 +96,7 @@ func TestSubmitPrintIQMarketsRoutesQuotesDatesAndAttachments(t *testing.T) {
 		}
 	}
 	for i, plan := range plans {
-		journal := &printIQJournal{Steps: map[string]*printIQSavedStep{}}
+		journal := &printIQJournal{Steps: map[string]*printIQSavedStep{}, Plans: []printIQMarketPlan{plan}, Artworks: artworks, PurchaseOrder: &printIQArtworkUpload{}, Visuals: &printIQArtworkUpload{}}
 		var persisted []byte
 		journal.save = func() error { var err error; persisted, err = json.Marshal(journal); return err }
 		result, failure := a.submitPrintIQMarket("test", &campaignRecord{}, AuthUser{}, plan, "C123", &printIQArtworkUpload{ArtworkURL: "https://example.test/po"}, &printIQArtworkUpload{ArtworkURL: "https://example.test/visuals"}, artworks, journal)
@@ -111,11 +111,16 @@ func TestSubmitPrintIQMarketsRoutesQuotesDatesAndAttachments(t *testing.T) {
 			}
 			restored.save = func() error { return nil }
 			result, failure = a.submitPrintIQMarket("retry", &campaignRecord{}, AuthUser{}, plan, "C123", &printIQArtworkUpload{ArtworkURL: "https://example.test/po"}, &printIQArtworkUpload{ArtworkURL: "https://example.test/visuals"}, artworks, &restored)
+			journal = &restored
 			// Drop the failed attempt from the count used by the ordering assertion below.
-			uploads["Q1-J1"] = uploads["Q1-J1"][:3]
+			uploads["Q1-J1"] = uploads["Q1-J1"][1:4]
 		}
 		if failure != nil {
 			t.Fatalf("submission failed: %#v", failure)
+		}
+		progress := journal.progressSummary()
+		if progress.TotalCalls != len(journal.Steps) || progress.CompletedCalls != progress.TotalCalls || progress.CompletedUploads != progress.TotalUploads || progress.Progress != 95 {
+			t.Fatalf("planned progress disagrees with actual PrintIQ calls: %+v (%d steps)", progress, len(journal.Steps))
 		}
 		wantQuote := fmt.Sprintf("Q%d", i+1)
 		if result.QuoteNo != wantQuote || result.Market != plan.Market || result.DueDate != plan.Values.DueDate || len(result.JobNos) != 3 {

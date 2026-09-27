@@ -82,16 +82,49 @@ export async function calculatePersistedCampaign(campaignId: string, tenantId?: 
   });
 }
 
-export async function submitCampaignToPrintIQ(campaignId: string, tenantId?: string | null, options?: { test?: boolean }) {
+export type CampaignSubmissionProgress = { progress: number; label: string };
+
+export async function submitCampaignToPrintIQ(campaignId: string, tenantId?: string | null, options?: {
+  test?: boolean;
+  onProgress?: (progress: CampaignSubmissionProgress) => void;
+}) {
   const path = withTenant(`/api/campaigns/${encodeURIComponent(campaignId)}/submit-to-printiq`, tenantId);
   const testPath = options?.test ? `${path}${path.includes('?') ? '&' : '?'}test=true` : path;
+  options?.onProgress?.({ progress: 3, label: 'Preparing campaign visuals' });
   const visuals = await generatePrintIQVisuals(campaignId, tenantId);
   const body = new FormData();
   body.append('visuals', visuals);
-  return apiFetchJson<CampaignSubmitResponse>(testPath, {
-    method: 'POST',
-    body,
-  });
+  options?.onProgress?.({ progress: 5, label: 'Preparing PrintIQ submission' });
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let controller: AbortController | undefined;
+  const poll = async () => {
+    controller = new AbortController();
+    const timeout = setTimeout(() => controller?.abort(), 5000);
+    try {
+      const progress = await apiFetchJson<CampaignSubmissionProgress & { totalCalls: number }>(
+        withTenant(`/api/campaigns/${encodeURIComponent(campaignId)}/submission-progress`, tenantId),
+        { signal: controller.signal, cache: 'no-store' },
+      );
+      if (!stopped && progress.totalCalls > 0) options?.onProgress?.(progress);
+    } catch {
+      if (!stopped) options?.onProgress?.({ progress: 0, label: 'Submission is running; waiting for a progress update' });
+    } finally {
+      clearTimeout(timeout);
+      if (!stopped) timer = setTimeout(() => void poll(), 1000);
+    }
+  };
+  if (options?.onProgress) void poll();
+  try {
+    const response = await apiFetchJson<CampaignSubmitResponse>(testPath, { method: 'POST', body });
+    stopped = true;
+    options?.onProgress?.({ progress: 100, label: 'Submission complete' });
+    return response;
+  } finally {
+    stopped = true;
+    clearTimeout(timer);
+    controller?.abort();
+  }
 }
 
 export async function downloadCampaignPurchaseOrder(campaignId: string, tenantId?: string | null): Promise<Blob> {

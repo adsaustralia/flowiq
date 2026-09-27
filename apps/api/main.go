@@ -269,6 +269,7 @@ func (a *app) routes() http.Handler {
 	mux.Handle("DELETE /api/campaigns/{campaignId}", a.withAuth(http.HandlerFunc(a.handleDeleteCampaign)))
 	mux.Handle("POST /api/campaigns/{campaignId}/calculate", a.withAuth(http.HandlerFunc(a.handleCalculatePersistedCampaign)))
 	mux.Handle("POST /api/campaigns/{campaignId}/submit-to-printiq", a.withAuth(http.HandlerFunc(a.handleSubmitCampaign)))
+	mux.Handle("GET /api/campaigns/{campaignId}/submission-progress", a.withAuth(http.HandlerFunc(a.handleSubmissionProgress)))
 	mux.Handle("GET /api/campaigns/{campaignId}/printiq-progress", a.withAuth(a.requireRoles(http.HandlerFunc(a.handlePrintIQProgress), "super_admin")))
 	mux.Handle("POST /api/campaigns/{campaignId}/printiq-progress/resolve-upload", a.withAuth(a.requireRoles(http.HandlerFunc(a.handlePrintIQProgress), "super_admin")))
 	mux.Handle("POST /api/campaigns/{campaignId}/mark-submitted", a.withAuth(http.HandlerFunc(a.handleMarkCampaignSubmitted)))
