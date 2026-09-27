@@ -54,22 +54,31 @@ test('PDF original without stored previews uses the PDF fallback', async () => {
 });
 
 for (const stage of ['fetch', 'body', 'decode']) {
-  test(`hung ${stage} fails with filename and aborts within deadline`, async () => {
-    let signal;
+  test(`hung preview ${stage} is aborted and falls back to thumbnail`, async () => {
+    const signals = [], urls = [];
     const never = () => new Promise(() => {});
-    const api = setup(async (_, options) => {
-      signal = options.signal;
-      if (stage === 'fetch') return never();
-      return stage === 'body' ? { ok: true, blob: never } : ok;
-    }, stage === 'decode' ? never : undefined);
-    await assert.rejects(api.loadArtworkExportPreview(image, url => url, () => assert.fail(), 20), /Creative 13.png: timed out/);
-    assert.equal(signal.aborted, true);
+    let decodeCalls = 0;
+    const api = setup(async (url, options) => {
+      urls.push(url); signals.push(options.signal);
+      if (url === '/small.webp' && stage === 'fetch') return never();
+      return url === '/small.webp' && stage === 'body' ? { ok: true, blob: never } : ok;
+    }, stage === 'decode' ? async () => (++decodeCalls === 1 ? never() : { width: 1200, height: 800, close() {} }) : undefined);
+    await api.loadArtworkExportPreview(image, url => url, () => assert.fail(), 20);
+    assert.deepEqual(urls, ['/small.webp', '/thumb.webp']);
+    assert.equal(signals[0].aborted, true);
+    assert.equal(signals[1].aborted, false);
   });
 }
 
 test('missing artwork reports a named error instead of silently omitting its preview', async () => {
   const api = setup(async () => ({ ok: false, status: 404 }));
   await assert.rejects(api.loadArtworkExportPreview(image, url => url, () => assert.fail()), /Creative 13.png: unable to prepare.*HTTP 404/);
+});
+
+test('reports the filename only after every available source times out', async () => {
+  const never = () => new Promise(() => {});
+  const api = setup(never);
+  await assert.rejects(api.loadArtworkExportPreview(image, url => url, () => assert.fail(), 10), /Creative 13.png: unable to prepare.*original timed out/);
 });
 
 test('limits concurrent previews to three and reports all completions', async () => {
