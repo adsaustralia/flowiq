@@ -269,6 +269,8 @@ func (a *app) routes() http.Handler {
 	mux.Handle("DELETE /api/campaigns/{campaignId}", a.withAuth(http.HandlerFunc(a.handleDeleteCampaign)))
 	mux.Handle("POST /api/campaigns/{campaignId}/calculate", a.withAuth(http.HandlerFunc(a.handleCalculatePersistedCampaign)))
 	mux.Handle("POST /api/campaigns/{campaignId}/submit-to-printiq", a.withAuth(http.HandlerFunc(a.handleSubmitCampaign)))
+	mux.Handle("GET /api/campaigns/{campaignId}/printiq-progress", a.withAuth(a.requireRoles(http.HandlerFunc(a.handlePrintIQProgress), "super_admin")))
+	mux.Handle("POST /api/campaigns/{campaignId}/printiq-progress/resolve-upload", a.withAuth(a.requireRoles(http.HandlerFunc(a.handlePrintIQProgress), "super_admin")))
 	mux.Handle("POST /api/campaigns/{campaignId}/mark-submitted", a.withAuth(http.HandlerFunc(a.handleMarkCampaignSubmitted)))
 	mux.Handle("POST /api/campaigns/{campaignId}/reset-status", a.withAuth(a.requireRoles(http.HandlerFunc(a.handleResetCampaignStatus), "super_admin")))
 	mux.Handle("GET /api/campaigns/{campaignId}/purchase-order/download", a.withAuth(a.requireRoles(http.HandlerFunc(a.handlePurchaseOrderDownload), "super_admin")))
@@ -1317,6 +1319,26 @@ func (a *app) handleSubmitCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	campaignID := r.PathValue("campaignId")
+	// Serialize submissions across tabs, users and API replicas.
+	lockConn, err := a.campaignStore.pool.Acquire(r.Context())
+	if err != nil {
+		writeJSON(w, 503, map[string]string{"error": "Unable to lock submission"})
+		return
+	}
+	defer lockConn.Release()
+	var locked bool
+	if err := lockConn.QueryRow(r.Context(), "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", "printiq:"+campaignID).Scan(&locked); err != nil || !locked {
+		writeJSON(w, 409, map[string]string{"error": "A submission for this campaign is already running"})
+		return
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := lockConn.Exec(ctx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", "printiq:"+campaignID); err != nil {
+			_ = lockConn.Conn().Close(ctx)
+		}
+	}()
+
 	campaign, err := a.campaignStore.getCampaign(r.Context(), *user, campaignID)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -1368,83 +1390,106 @@ func (a *app) handleSubmitCampaign(w http.ResponseWriter, r *http.Request) {
 
 	requestID := createRequestID()
 
-	tenant, err := a.authStore.getTenant(campaign.TenantID)
+	journal, err := a.loadPrintIQJournal(r.Context(), campaign)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, 500, map[string]string{"error": "Unable to load submission progress"})
 		return
 	}
-	sheetSettings, err := a.mappingStore.listSheetNameOverrides(r.Context(), campaign.TenantID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if journal != nil && (journal.Fingerprint != campaignSubmissionFingerprint(campaign) || journal.Test != testSubmission) {
+		writeJSON(w, 409, map[string]string{"error": "This campaign has an unfinished PrintIQ submission with different inputs. ADS must reconcile it before submitting changed data"})
 		return
 	}
-	materialProductMappings, err := a.mappingStore.listMaterialProductMappingsByMarket(r.Context(), campaign.TenantID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	shippingRates, err := a.mappingStore.listMarketShippingRates(r.Context(), campaign.TenantID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	assetShippingCosts, err := a.mappingStore.listMarketAssetShippingCosts(r.Context(), campaign.TenantID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	sheetProducts, err := resolvePrintIQSheetProducts(campaign.Values, campaign.Summary, materialProductMappings, sheetSettings.ProductCodes, sheetSettings.CustomSheetSizeFormats)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	creatorName, err := a.campaignStore.campaignCreatorDisplayName(r.Context(), campaign.ID, campaign.TenantID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Unable to resolve campaign creator"})
-		return
-	}
-	submissionValues := campaign.Values
-	submissionValues.CreatedByDisplayName = creatorName
-	plans, err := buildPrintIQMarketPlans(submissionValues, campaign.Summary, sheetProducts, shippingRates, assetShippingCosts, sheetSettings.CustomSheetSizeFormats, tenant.Code)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	visualsUpload, err := a.receivePrintIQVisuals(w, r)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	purchaseOrderUpload, err := a.extractPurchaseOrderUpload(r.Context(), campaign.PurchaseOrder)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	// Resolve every attachment before creating any external quotes.
-	artworkUploads := map[string]*printIQArtworkUpload{}
-	for _, product := range sheetProducts {
-		if _, exists := artworkUploads[product.ArtworkImageID]; exists {
-			continue
+	if journal == nil {
+		if err := a.checkPrintIQHistory(r.Context(), campaign); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
 		}
-		artwork, err := a.extractCampaignArtworkUpload(r.Context(), campaign.Values, product.ArtworkImageID)
+		tenant, err := a.authStore.getTenant(campaign.TenantID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		artworkUploads[product.ArtworkImageID] = artwork
+		sheetSettings, err := a.mappingStore.listSheetNameOverrides(r.Context(), campaign.TenantID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		materialProductMappings, err := a.mappingStore.listMaterialProductMappingsByMarket(r.Context(), campaign.TenantID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		shippingRates, err := a.mappingStore.listMarketShippingRates(r.Context(), campaign.TenantID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		assetShippingCosts, err := a.mappingStore.listMarketAssetShippingCosts(r.Context(), campaign.TenantID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		sheetProducts, err := resolvePrintIQSheetProducts(campaign.Values, campaign.Summary, materialProductMappings, sheetSettings.ProductCodes, sheetSettings.CustomSheetSizeFormats)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		creatorName, err := a.campaignStore.campaignCreatorDisplayName(r.Context(), campaign.ID, campaign.TenantID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Unable to resolve campaign creator"})
+			return
+		}
+		submissionValues := campaign.Values
+		submissionValues.CreatedByDisplayName = creatorName
+		plans, err := buildPrintIQMarketPlans(submissionValues, campaign.Summary, sheetProducts, shippingRates, assetShippingCosts, sheetSettings.CustomSheetSizeFormats, tenant.Code)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		visualsUpload, err := a.receivePrintIQVisuals(w, r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		purchaseOrderUpload, err := a.extractPurchaseOrderUpload(r.Context(), campaign.PurchaseOrder)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		// Resolve every attachment before creating any external quotes.
+		artworkUploads := map[string]*printIQArtworkUpload{}
+		for _, product := range sheetProducts {
+			if _, exists := artworkUploads[product.ArtworkImageID]; exists {
+				continue
+			}
+			artwork, err := a.extractCampaignArtworkUpload(r.Context(), campaign.Values, product.ArtworkImageID)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			artworkUploads[product.ArtworkImageID] = artwork
+		}
+		journal = &printIQJournal{Test: testSubmission, Creator: creatorName, Plans: plans, CustomerCode: tenant.Code, PurchaseOrder: purchaseOrderUpload, Visuals: visualsUpload, Artworks: artworkUploads}
+		if err := a.createPrintIQJournal(r.Context(), campaign, journal); err != nil {
+			writeJSON(w, 500, map[string]string{"error": "Unable to save submission progress"})
+			return
+		}
 	}
+	a.bindPrintIQJournal(r.Context(), journal)
+	plans := journal.Plans
+
 	submissions := make([]*printIQMarketSubmission, 0, len(plans))
 	quoteNos := make([]string, 0, len(plans))
 	jobNos := []string{}
 	updatedCampaign := campaign
 	for index, plan := range plans {
-		submission, failure := a.submitPrintIQMarket(requestID, campaign, *user, plan, tenant.Code, purchaseOrderUpload, visualsUpload, artworkUploads)
+		submission, failure := a.submitPrintIQMarket(requestID, campaign, *user, plan, journal.CustomerCode, journal.PurchaseOrder, journal.Visuals, journal.Artworks, journal)
 		if failure != nil {
 			writePrintIQMarketFailure(w, failure, plan.Market, submissions, submission)
 			return
 		}
 		// Persist each quote and its jobs separately. Only the final market completes the campaign.
-		updatedCampaign, err = a.campaignStore.recordSubmission(r.Context(), *user, campaign.ID, submission.RequestPayload, submission.ResponsePayload, nil, submission.JobNos, !testSubmission && index == len(plans)-1)
+		updatedCampaign, err = a.campaignStore.recordSubmission(r.Context(), *user, campaign.ID, submission.RequestPayload, submission.ResponsePayload, nil, submission.JobNos, !testSubmission && index == len(plans)-1, printIQRecordCheckpoint{ID: journal.ID, Market: plan.Market, Final: index == len(plans)-1})
 		if err != nil {
 			writePrintIQMarketFailure(w, &printIQSubmissionFailure{Status: http.StatusInternalServerError, Body: map[string]any{"error": "Unable to save the PrintIQ submission: " + err.Error()}}, plan.Market, submissions, submission)
 			return

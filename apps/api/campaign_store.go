@@ -891,7 +891,7 @@ func (s *campaignStore) calculateCampaign(ctx context.Context, user AuthUser, ca
 	return updatedCampaign, summary, nil
 }
 
-func (s *campaignStore) recordSubmission(ctx context.Context, user AuthUser, campaignID string, requestPayload, responsePayload any, amount any, externalJobIDs []string, markSubmitted bool) (*campaignRecord, error) {
+func (s *campaignStore) recordSubmission(ctx context.Context, user AuthUser, campaignID string, requestPayload, responsePayload any, amount any, externalJobIDs []string, markSubmitted bool, checkpoints ...printIQRecordCheckpoint) (*campaignRecord, error) {
 	campaign, err := s.getCampaign(ctx, user, campaignID)
 	if err != nil {
 		return nil, err
@@ -920,6 +920,20 @@ func (s *campaignStore) recordSubmission(ctx context.Context, user AuthUser, cam
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	if len(checkpoints) > 0 {
+		checkpoint := checkpoints[0]
+		var recorded bool
+		if err := tx.QueryRow(ctx, `SELECT recorded_markets ? $2 FROM printiq_submission_progress WHERE id=$1 AND campaign_id=$3 AND tenant_id=$4 FOR UPDATE`, checkpoint.ID, checkpoint.Market, campaign.ID, campaign.TenantID).Scan(&recorded); err != nil {
+			return nil, err
+		}
+		if recorded {
+			return s.getCampaign(ctx, user, campaign.ID)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE printiq_submission_progress SET recorded_markets=recorded_markets || jsonb_build_object($2::text,true), completed=$3, updated_at=NOW() WHERE id=$1`, checkpoint.ID, checkpoint.Market, checkpoint.Final); err != nil {
+			return nil, err
+		}
+	}
 
 	quoteID := uuid.NewString()
 	if _, err := tx.Exec(ctx, `

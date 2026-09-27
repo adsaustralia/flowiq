@@ -16,6 +16,7 @@ func TestSubmitPrintIQMarketsRoutesQuotesDatesAndAttachments(t *testing.T) {
 	quoteNo := ""
 	uploads := map[string][]string{}
 	accepts := 0
+	failUpload := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var p map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -74,6 +75,11 @@ func TestSubmitPrintIQMarketsRoutesQuotesDatesAndAttachments(t *testing.T) {
 				t.Errorf("attachment sent to wrong job: %#v", p)
 			}
 			uploads[job] = append(uploads[job], printIQStringValue(p["ArtworkUrl"]))
+			if job == "Q1-J1" && strings.HasSuffix(printIQStringValue(p["ArtworkUrl"]), "/po") && failUpload {
+				failUpload = false
+				response = map[string]any{"IsError": true, "ErrorMessage": "Artwork rejected"}
+			}
+
 		default:
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
 		}
@@ -90,7 +96,24 @@ func TestSubmitPrintIQMarketsRoutesQuotesDatesAndAttachments(t *testing.T) {
 		}
 	}
 	for i, plan := range plans {
-		result, failure := a.submitPrintIQMarket("test", &campaignRecord{}, AuthUser{}, plan, "C123", &printIQArtworkUpload{ArtworkURL: "https://example.test/po"}, &printIQArtworkUpload{ArtworkURL: "https://example.test/visuals"}, artworks)
+		journal := &printIQJournal{Steps: map[string]*printIQSavedStep{}}
+		var persisted []byte
+		journal.save = func() error { var err error; persisted, err = json.Marshal(journal); return err }
+		result, failure := a.submitPrintIQMarket("test", &campaignRecord{}, AuthUser{}, plan, "C123", &printIQArtworkUpload{ArtworkURL: "https://example.test/po"}, &printIQArtworkUpload{ArtworkURL: "https://example.test/visuals"}, artworks, journal)
+		if i == 0 {
+			if failure == nil || len(uploads["Q1-J2"]) != 1 {
+				t.Fatal("failure must continue to later jobs")
+			}
+			// Simulate process restart: quote acceptance and successful uploads must replay locally.
+			var restored printIQJournal
+			if err := json.Unmarshal(persisted, &restored); err != nil {
+				t.Fatal(err)
+			}
+			restored.save = func() error { return nil }
+			result, failure = a.submitPrintIQMarket("retry", &campaignRecord{}, AuthUser{}, plan, "C123", &printIQArtworkUpload{ArtworkURL: "https://example.test/po"}, &printIQArtworkUpload{ArtworkURL: "https://example.test/visuals"}, artworks, &restored)
+			// Drop the failed attempt from the count used by the ordering assertion below.
+			uploads["Q1-J1"] = uploads["Q1-J1"][:3]
+		}
 		if failure != nil {
 			t.Fatalf("submission failed: %#v", failure)
 		}

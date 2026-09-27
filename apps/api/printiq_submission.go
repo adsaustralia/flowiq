@@ -31,7 +31,11 @@ func writePrintIQMarketFailure(w http.ResponseWriter, failure *printIQSubmission
 	}
 	message := fmt.Sprintf("%s: %v", market, failure.Body["error"])
 	if len(quotes) > 0 {
-		message += fmt.Sprintf(" PrintIQ quotes already created: %s. Check with ADS before retrying to avoid duplicate quotes.", strings.Join(quotes, ", "))
+		if failure.Body["progressSaved"] == true {
+			message += fmt.Sprintf(" Existing PrintIQ quotes: %s.", strings.Join(quotes, ", "))
+		} else {
+			message += fmt.Sprintf(" PrintIQ quotes already created: %s. Check with ADS before retrying to avoid duplicate quotes.", strings.Join(quotes, ", "))
+		}
 	}
 	failure.Body["error"] = message
 	failure.Body["market"] = market
@@ -41,7 +45,18 @@ func writePrintIQMarketFailure(w http.ResponseWriter, failure *printIQSubmission
 	writeJSON(w, failure.Status, failure.Body)
 }
 
-func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, user AuthUser, plan printIQMarketPlan, customerCode string, purchaseOrderUpload, visualsUpload *printIQArtworkUpload, artworkUploads map[string]*printIQArtworkUpload) (*printIQMarketSubmission, *printIQSubmissionFailure) {
+func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, user AuthUser, plan printIQMarketPlan, customerCode string, purchaseOrderUpload, visualsUpload *printIQArtworkUpload, artworkUploads map[string]*printIQArtworkUpload, journals ...*printIQJournal) (*printIQMarketSubmission, *printIQSubmissionFailure) {
+	stepIndex := 0
+	run := func(requestID string, campaign *campaignRecord, user AuthUser, step string, payload any, call func(any) (any, int, error), products ...printIQSheetProduct) (any, *printIQSubmissionFailure) {
+		key := fmt.Sprintf("%s:%d", plan.Market, stepIndex)
+		stepIndex++
+		if len(journals) > 0 {
+			return journals[0].run(key, step, payload, func() (any, *printIQSubmissionFailure) {
+				return a.runPrintIQSubmissionStep(requestID, campaign, user, step, payload, call, products...)
+			})
+		}
+		return a.runPrintIQSubmissionStep(requestID, campaign, user, step, payload, call, products...)
+	}
 	result := &printIQMarketSubmission{Market: plan.Market, DueDate: plan.Values.DueDate}
 	sheetProducts := plan.Products
 	deliveryJobPayloads := plan.DeliveryPayloads
@@ -52,7 +67,7 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 	createQuoteValues.ProductCode = firstProduct.ProductCode
 	createQuoteValues.Quantity = strconv.Itoa(firstProduct.Quantity)
 	createQuotePayload := buildPrintIQCreateQuotePayload(createQuoteValues, nil, firstProduct, targetQuoteFreightPrice)
-	createQuoteResponse, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "CreateQuoteWithDelivery", createQuotePayload, a.optionService.createQuoteWithDelivery, firstProduct)
+	createQuoteResponse, failure := run(requestID, campaign, user, "CreateQuoteWithDelivery", createQuotePayload, a.optionService.createQuoteWithDelivery, firstProduct)
 	if failure != nil {
 		return result, failure
 	}
@@ -70,7 +85,7 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 	for _, product := range sheetProducts[1:] {
 		getPricePayload := buildPrintIQGetPricePayload(plan.Values, product, quoteNo, customerCode)
 		getPricePayloads = append(getPricePayloads, getPricePayload)
-		getPriceResponse, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "GetPrice", getPricePayload, a.optionService.getPrice, product)
+		getPriceResponse, failure := run(requestID, campaign, user, "GetPrice", getPricePayload, a.optionService.getPrice, product)
 		if failure != nil {
 			return result, failure
 		}
@@ -91,7 +106,7 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 		}
 		getQuoteQuestionsPayload := buildPrintIQGetQuoteQuestionsPayload(qqdKey)
 		getQuoteQuestionsPayloads = append(getQuoteQuestionsPayloads, getQuoteQuestionsPayload)
-		getQuoteQuestionsResponse, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "GetQuoteQuestions", getQuoteQuestionsPayload, a.optionService.getQuoteQuestions)
+		getQuoteQuestionsResponse, failure := run(requestID, campaign, user, "GetQuoteQuestions", getQuoteQuestionsPayload, a.optionService.getQuoteQuestions)
 		if failure != nil {
 			return result, failure
 		}
@@ -104,7 +119,7 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 	}
 
 	saveQuoteQuestionsPayload := buildPrintIQSaveProofContactQuestionsPayload(quoteQuestionQQDPKeys)
-	saveQuoteQuestionsResponse, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "SaveQuoteQuestions", saveQuoteQuestionsPayload, a.optionService.saveQuoteQuestions)
+	saveQuoteQuestionsResponse, failure := run(requestID, campaign, user, "SaveQuoteQuestions", saveQuoteQuestionsPayload, a.optionService.saveQuoteQuestions)
 	if failure != nil {
 		return result, failure
 	}
@@ -112,7 +127,7 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 	for _, payload := range deliveryJobPayloads {
 		payload["QuoteNo"] = quoteNo
 		getPricePayloads = append(getPricePayloads, payload)
-		response, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "GetPrice", payload, a.optionService.getPrice, printIQSheetProduct{Market: strings.TrimSuffix(printIQStringValue(payload["ProductCode"]), " Delivery"), FormatKey: "Delivery"})
+		response, failure := run(requestID, campaign, user, "GetPrice", payload, a.optionService.getPrice, printIQSheetProduct{Market: strings.TrimSuffix(printIQStringValue(payload["ProductCode"]), " Delivery"), FormatKey: "Delivery"})
 		if failure != nil {
 			return result, failure
 		}
@@ -122,7 +137,7 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 		}
 	}
 	acceptQuotePayload := buildPrintIQAcceptQuotePayload(quoteNo, plan.Values.DueDate)
-	acceptQuoteResponse, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "AcceptQuote", acceptQuotePayload, a.optionService.acceptQuote, firstProduct)
+	acceptQuoteResponse, failure := run(requestID, campaign, user, "AcceptQuote", acceptQuotePayload, a.optionService.acceptQuote, firstProduct)
 	if failure != nil {
 		return result, failure
 	}
@@ -140,6 +155,8 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 	}
 
 	result.JobNos = jobNos
+	var uploadFailure *printIQSubmissionFailure
+	failedUploads := []map[string]any{}
 	uploadArtworkPayloads := make([]any, 0, len(sheetProducts)+2)
 	uploadArtworkResponses := make([]any, 0, len(sheetProducts)+2)
 	for index, product := range sheetProducts {
@@ -147,9 +164,10 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 		if index == 0 && purchaseOrderUpload != nil {
 			uploadPayload := buildPrintIQUploadArtworkPayload(acceptedProducts[index].JobNo, *purchaseOrderUpload, true, false)
 			uploadArtworkPayloads = append(uploadArtworkPayloads, uploadPayload)
-			uploadResponse, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "UploadArtworkURL", uploadPayload, a.optionService.uploadArtworkURL)
+			uploadResponse, failure := run(requestID, campaign, user, "UploadArtworkURL", uploadPayload, a.optionService.uploadArtworkURL)
 			if failure != nil {
-				return result, failure
+				uploadFailure = failure
+				failedUploads = append(failedUploads, map[string]any{"jobNo": uploadPayload["JobNo"], "artworkUrl": uploadPayload["ArtworkUrl"], "error": failure.Body["error"]})
 			}
 			uploadArtworkResponses = append(uploadArtworkResponses, uploadResponse)
 		}
@@ -157,9 +175,10 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 		if index == 0 && visualsUpload != nil {
 			uploadPayload := buildPrintIQUploadArtworkPayload(acceptedProducts[index].JobNo, *visualsUpload, true, false)
 			uploadArtworkPayloads = append(uploadArtworkPayloads, uploadPayload)
-			uploadResponse, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "UploadArtworkURL", uploadPayload, a.optionService.uploadArtworkURL)
+			uploadResponse, failure := run(requestID, campaign, user, "UploadArtworkURL", uploadPayload, a.optionService.uploadArtworkURL)
 			if failure != nil {
-				return result, failure
+				uploadFailure = failure
+				failedUploads = append(failedUploads, map[string]any{"jobNo": uploadPayload["JobNo"], "artworkUrl": uploadPayload["ArtworkUrl"], "error": failure.Body["error"]})
 			}
 			uploadArtworkResponses = append(uploadArtworkResponses, uploadResponse)
 		}
@@ -167,12 +186,32 @@ func (a *app) submitPrintIQMarket(requestID string, campaign *campaignRecord, us
 		if artwork != nil {
 			uploadPayload := buildPrintIQUploadArtworkPayload(acceptedProducts[index].JobNo, *artwork, false, true)
 			uploadArtworkPayloads = append(uploadArtworkPayloads, uploadPayload)
-			uploadResponse, failure := a.runPrintIQSubmissionStep(requestID, campaign, user, "UploadArtworkURL", uploadPayload, a.optionService.uploadArtworkURL)
+			uploadResponse, failure := run(requestID, campaign, user, "UploadArtworkURL", uploadPayload, a.optionService.uploadArtworkURL)
 			if failure != nil {
-				return result, failure
+				uploadFailure = failure
+				failedUploads = append(failedUploads, map[string]any{"jobNo": uploadPayload["JobNo"], "artworkUrl": uploadPayload["ArtworkUrl"], "error": failure.Body["error"]})
 			}
 			uploadArtworkResponses = append(uploadArtworkResponses, uploadResponse)
 		}
+	}
+
+	if uploadFailure != nil {
+		body := map[string]any{}
+		for key, value := range uploadFailure.Body {
+			body[key] = value
+		}
+		uploadFailure = &printIQSubmissionFailure{Status: uploadFailure.Status, Body: body}
+		uploadFailure.Body["failedUploads"] = failedUploads
+		failedJobs := []string{}
+		for _, failed := range failedUploads {
+			failedJobs = append(failedJobs, fmt.Sprint(failed["jobNo"]))
+		}
+		uploadFailure.Body["error"] = fmt.Sprintf("%v. Unresolved attachments on jobs: %s", uploadFailure.Body["error"], strings.Join(failedJobs, ", "))
+		if len(journals) > 0 {
+			uploadFailure.Body["progressSaved"] = true
+			uploadFailure.Body["error"] = fmt.Sprintf("%v. Other attachments were attempted. Submission progress is saved; retry uses the existing quotes and jobs. Calls with uncertain outcomes require ADS reconciliation", uploadFailure.Body["error"])
+		}
+		return result, uploadFailure
 	}
 
 	requestPayload := map[string]any{
