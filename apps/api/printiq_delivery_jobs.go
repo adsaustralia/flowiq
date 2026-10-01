@@ -30,7 +30,7 @@ func buildPrintIQDeliveryJobPayloads(values orderFormValues, summary *campaignSu
 		}
 		cost := calculateCampaignShippingCost(marketValues, summary, rates, assetCosts, customFormats)
 		title := fmt.Sprintf("%s ($%s) Direct Deliver", name, strconv.FormatFloat(cost, 'f', -1, 64))
-		date := printIQDeliveryDate(values.DueDate)
+		date := printIQDeliveryDate(market.DueDate)
 		if date != "" {
 			title += " " + date
 		}

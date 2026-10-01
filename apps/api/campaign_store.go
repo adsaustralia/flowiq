@@ -99,8 +99,10 @@ func validateCampaignDates(values orderFormValues) error {
 	if err := validateDateIsTodayOrFuture(values.CampaignStartDate, "Campaign start date"); err != nil {
 		return err
 	}
-	if err := validateDateIsTodayOrFuture(values.DueDate, "Delivery Due Date"); err != nil {
-		return err
+	for _, market := range values.CampaignMarkets {
+		if err := validateDateIsTodayOrFuture(market.DueDate, market.Market+" delivery due date"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -168,6 +168,7 @@ type artworkMaterialAssignment struct {
 }
 
 type campaignMarket struct {
+	DueDate           string                     `json:"dueDate"`
 	ID                string                     `json:"id"`
 	Market            string                     `json:"market"`
 	Assets            []campaignAsset            `json:"assets"`

@@ -21,16 +21,9 @@ func printIQMarketDueDate(raw, market string) (string, error) {
 	}
 	date, err := time.Parse("2006-01-02", raw)
 	if err != nil {
-		return "", fmt.Errorf("Invalid delivery due date %q", raw)
+		return "", fmt.Errorf("Invalid delivery due date %q for %s", raw, market)
 	}
-	days := 0
-	switch printIQDeliveryProductCode(market) {
-	case "QLD Delivery":
-		days = 4
-	case "NSW Delivery":
-		days = 2
-	}
-	return date.AddDate(0, 0, -days).Format("2006-01-02"), nil
+	return date.Format("2006-01-02"), nil
 }
 
 // Plan every market before making external calls so configuration errors cannot
@@ -64,14 +57,26 @@ func buildPrintIQMarketPlans(values orderFormValues, summary *campaignSummary, p
 	for i := range plans {
 		plan := &plans[i]
 		plan.Freight = calculateCampaignShippingCost(plan.Values, summary, rates, assetCosts, customFormats)
-		// Delivery instructions retain the original arrival deadline. The earlier
-		// quote due date allows time for interstate delivery.
+		// Resolve the date before building any quote or delivery payload.
+		plan.Values.DueDate = ""
+		for _, market := range plan.Values.CampaignMarkets {
+			dueDate, err := printIQMarketDueDate(market.DueDate, plan.Market)
+			if err != nil {
+				return nil, err
+			}
+			if dueDate == "" {
+				return nil, fmt.Errorf("Add a due date for %s before submitting to PrintIQ", plan.Market)
+			}
+			if plan.Values.DueDate != "" && plan.Values.DueDate != dueDate {
+				return nil, fmt.Errorf("Conflicting due dates for market %s", plan.Market)
+			}
+			plan.Values.DueDate = dueDate
+		}
+		if plan.Values.DueDate == "" {
+			return nil, fmt.Errorf("Add a due date for %s before submitting to PrintIQ", plan.Market)
+		}
 		var err error
 		plan.DeliveryPayloads, err = buildPrintIQDeliveryJobPayloads(plan.Values, summary, plan.Products, rates, assetCosts, customFormats, customerCode)
-		if err != nil {
-			return nil, err
-		}
-		plan.Values.DueDate, err = printIQMarketDueDate(values.DueDate, plan.Market)
 		if err != nil {
 			return nil, err
 		}

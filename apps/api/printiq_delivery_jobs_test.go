@@ -8,7 +8,7 @@ import (
 func TestDeliveryJobsUseMarketCodesCostsAndDescriptions(t *testing.T) {
 	address := "Shay Mehin\n6 Bakehouse St\nKensington VIC 3031\nPhone: 0411 491 541\nDelivery time: 10am-3pm\nNotes: Pallet jack required\nAustralia"
 	values := orderFormValues{CampaignName: "Marc Jacobs", DueDate: "2026-09-16", CreativeNameAssignments: map[string]string{"Creative4": "art"}, CampaignMarkets: []campaignMarket{
-		{Market: "VIC", Assets: []campaignAsset{{ID: "vic", CreativeImageID: "art", DeliveryAddress: address}}},
+		{Market: "VIC", DueDate: "2026-09-16", Assets: []campaignAsset{{ID: "vic", CreativeImageID: "art", DeliveryAddress: address}}},
 		{Market: "NSW"}, {Market: "QLD"}, {Market: "VIC"},
 	}}
 	summary := &campaignSummary{Lines: []campaignLineResult{{ID: "vic", Market: "VIC", Breakdown: quantityBreakdown{"8-sheet": 8}}}, PerMarket: []campaignTotals{{Market: "VIC", Breakdown: quantityBreakdown{"8-sheet": 8}}}}

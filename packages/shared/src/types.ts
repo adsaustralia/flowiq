@@ -132,6 +132,7 @@ export type CampaignAsset = {
 };
 
 export type CampaignMarket = {
+  dueDate: string;
   id: string;
   market: string;
   assets: CampaignAsset[];
@@ -358,6 +359,7 @@ export type OrderFormValues = {
   quantity: string;
   kindName: string;
   campaignStartDate: string;
+  /** Legacy campaign date, read only to populate older campaigns. Use campaignMarkets[].dueDate. */
   dueDate: string;
   numberOfWeeks: string;
   printImages: CampaignPrintImage[];
@@ -400,6 +402,7 @@ export type CampaignListItem = {
   updatedBy: string;
   campaignName: string;
   campaignStartDate: string;
+  /** Legacy campaign date, read only to populate older campaigns. Use campaignMarkets[].dueDate. */
   dueDate: string;
   numberOfWeeks: string;
   marketCount: number;

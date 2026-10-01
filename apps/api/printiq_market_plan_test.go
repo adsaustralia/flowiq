@@ -8,10 +8,10 @@ import (
 
 func TestPrintIQMarketDueDate(t *testing.T) {
 	for _, tc := range []struct{ market, date, want string }{
-		{"Brisbane", "2026-09-21", "2026-09-17"},
-		{" qLd ", "2026-01-02", "2025-12-29"},
-		{"Sydney", "2026-09-21", "2026-09-19"},
-		{"NSW", "2024-03-01", "2024-02-28"},
+		{"Brisbane", "2026-09-21", "2026-09-21"},
+		{" qLd ", "2026-01-02", "2026-01-02"},
+		{"Sydney", "2026-09-21", "2026-09-21"},
+		{"NSW", "2024-03-01", "2024-03-01"},
 		{"Melbourne", "2026-09-21", "2026-09-21"},
 		{"VIC", " 2026-09-21 ", "2026-09-21"},
 		{"Brisbane", "", ""},
@@ -35,7 +35,7 @@ func marketSubmissionFixture(t *testing.T) (orderFormValues, []printIQMarketPlan
 	products := []printIQSheetProduct{}
 	rates := []marketShippingRateRecord{}
 	for i, market := range []string{"Brisbane", "Sydney", "Melbourne"} {
-		values.CampaignMarkets = append(values.CampaignMarkets, campaignMarket{Market: market, Assets: []campaignAsset{{ID: market, CreativeImageID: market}}})
+		values.CampaignMarkets = append(values.CampaignMarkets, campaignMarket{Market: market, DueDate: []string{"2026-10-05", "2026-10-02", "2026-10-08"}[i], Assets: []campaignAsset{{ID: market, CreativeImageID: market, DeliveryAddress: "Warehouse\n1 Main Street"}}})
 		summary.Lines = append(summary.Lines, campaignLineResult{ID: market, Market: market, Breakdown: quantityBreakdown{"8-sheet": 8}})
 		summary.PerMarket = append(summary.PerMarket, campaignTotals{Market: market, Breakdown: quantityBreakdown{"8-sheet": 8}})
 		products = append(products, printIQSheetProduct{Market: market, ProductCode: market + " Print", Quantity: 8, ArtworkImageID: market})
@@ -69,12 +69,15 @@ func TestMarketPlansSeparateProductsFreightAndDates(t *testing.T) {
 				t.Fatalf("product from another market: %#v", product)
 			}
 		}
-		wantDate := []string{"2026-09-27", "2026-09-29", "2026-10-01"}[i]
+		wantDate := []string{"2026-10-05", "2026-10-02", "2026-10-08"}[i]
 		if plan.Values.DueDate != wantDate {
 			t.Fatalf("%s: got %s want %s", plan.Market, plan.Values.DueDate, wantDate)
 		}
-		if !strings.Contains(plan.DeliveryPayloads[0]["JobTitle"].(string), "Thursday 1st October") {
-			t.Fatal("delivery deadline should remain the campaign arrival date")
+		if !strings.Contains(plan.DeliveryPayloads[0]["JobTitle"].(string), printIQDeliveryDate(wantDate)) {
+			t.Fatal("delivery deadline should use the market date")
+		}
+		if !strings.Contains(plan.DeliveryPayloads[0]["JobDescription"].(string), printIQDeliveryDate(wantDate)) {
+			t.Fatal("delivery instructions must use the market date")
 		}
 		if plan.DeliveryPayloads[0]["ProductCode"] != printIQDeliveryProductCode(plan.Market) {
 			t.Fatal("delivery job belongs to another market")
@@ -90,7 +93,7 @@ func TestMarketPlansSeparateProductsFreightAndDates(t *testing.T) {
 
 func TestMarketPlansGroupAliases(t *testing.T) {
 	products := []printIQSheetProduct{{Market: "QLD", Quantity: 1}, {Market: " brisbane ", Quantity: 2}, {Market: "NSW", Quantity: 1}}
-	plans, err := buildPrintIQMarketPlans(orderFormValues{CampaignMarkets: []campaignMarket{{Market: "Brisbane"}, {Market: "Sydney"}}}, nil, products, nil, nil, nil, "C123")
+	plans, err := buildPrintIQMarketPlans(orderFormValues{CampaignMarkets: []campaignMarket{{Market: "Brisbane", DueDate: "2026-10-05"}, {Market: "Sydney", DueDate: "2026-10-02"}}}, nil, products, nil, nil, nil, "C123")
 	if err != nil || len(plans) != 2 || !reflect.DeepEqual(plans[0].Products, products[:2]) {
 		t.Fatalf("aliases were not grouped: %#v, %v", plans, err)
 	}

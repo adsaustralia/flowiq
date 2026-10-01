@@ -464,7 +464,6 @@ export function CampaignLandingScreen({ onOpenCampaign, selectedTenantId, initia
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Markets</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Assets</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Start</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Due</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Weeks</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Status</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Action</th>
@@ -514,7 +513,6 @@ export function CampaignLandingScreen({ onOpenCampaign, selectedTenantId, initia
                   <td className="px-5 py-2.5 text-center font-semibold text-white">{campaign.marketCount}</td>
                   <td className="px-5 py-2.5 text-center font-semibold text-white">{campaign.assetCount}</td>
                   <td className="px-5 py-2.5 text-slate-300">{formatCampaignDate(campaign.campaignStartDate)}</td>
-                  <td className="px-5 py-2.5 text-slate-300">{formatCampaignDate(campaign.dueDate)}</td>
                   <td className="px-5 py-2.5 text-center text-slate-300">{campaign.numberOfWeeks || '0'}</td>
                   <td className="px-5 py-2.5 text-center">
                     <span className={campaign.status === 'submitted'

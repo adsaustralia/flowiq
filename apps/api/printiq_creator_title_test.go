@@ -9,7 +9,7 @@ func TestPrintIQPrintingTitlesIncludeCampaignCreator(t *testing.T) {
 	values := orderFormValues{
 		ClientName: "Client", PurchaseOrderNumber: "PO-123", CampaignName: "Campaign",
 		CreatedByDisplayName: "  Dean Wright  ",
-		CampaignMarkets:      []campaignMarket{{Market: "VIC"}},
+		CampaignMarkets:      []campaignMarket{{Market: "VIC", DueDate: "2026-10-05"}},
 	}
 	products := []printIQSheetProduct{
 		{Market: "VIC", SheetCode: "S1", ProductCode: "Quad", Quantity: 1},
@@ -28,7 +28,7 @@ func TestPrintIQPrintingTitlesIncludeCampaignCreator(t *testing.T) {
 	if got := additional["JobTitle"]; got != "C1_Client_PO-123_S2-Double-Campaign_Dean Wright" {
 		t.Fatalf("additional title = %v", got)
 	}
-	if got := plan.DeliveryPayloads[0]["JobTitle"]; got != "VIC ($0) Direct Deliver (Campaign)" {
+	if got := plan.DeliveryPayloads[0]["JobTitle"]; got != "VIC ($0) Direct Deliver Monday 5th October (Campaign)" {
 		t.Fatalf("delivery title changed: %v", got)
 	}
 }

@@ -349,17 +349,6 @@ function parseDateOnly(value: string) {
   return parsed;
 }
 
-function previousWednesday(value: string) {
-  const startDate = parseDateOnly(value);
-  if (!startDate) return '';
-  const daysSinceWednesday = (startDate.getDay() - 3 + 7) % 7;
-  startDate.setDate(startDate.getDate() - (daysSinceWednesday || 7));
-  const year = String(startDate.getFullYear());
-  const month = String(startDate.getMonth() + 1).padStart(2, '0');
-  const day = String(startDate.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 function getTodayDateInputValue() {
   const now = new Date();
   const year = String(now.getFullYear());
@@ -433,11 +422,13 @@ function normalizeFormValues(values: OrderFormValues): OrderFormValues {
 
   return {
     ...values,
+    dueDate: '',
     purchaseOrderNumber: values.purchaseOrderNumber ?? '',
     clientName: values.clientName ?? '',
     productCode: values.productCode || createDefaultFormValues().productCode,
     campaignMarkets: (values.campaignMarkets ?? []).map((market) => ({
       ...market,
+      dueDate: market.dueDate ?? values.dueDate ?? '',
       assets: (market.assets ?? []).map((asset) => {
         const creativeImageIds = normalizeCreativeImageIds(asset);
         return {
@@ -1295,7 +1286,6 @@ export function QuoteBuilderScreen({
   const effectiveTenantId = tenantId ?? session?.user.tenantId ?? null;
   const [values, setValues] = useState<OrderFormValues>(() => defaultValues);
   const [campaignStartDateInput, setCampaignStartDateInput] = useState('');
-  const [dueDateInput, setDueDateInput] = useState('');
   const [campaignId, setCampaignId] = useState<string | null>(selectedCampaignId ?? null);
   const [campaignStatus, setCampaignStatus] = useState<CampaignRecord['status']>('in_progress');
   const [parentCampaignId, setParentCampaignId] = useState('');
@@ -1403,7 +1393,6 @@ export function QuoteBuilderScreen({
   const purchaseOrderInputRef = useRef<HTMLInputElement | null>(null);
   const supportingDocumentInputRef = useRef<HTMLInputElement | null>(null);
   const campaignStartPickerRef = useRef<HTMLInputElement | null>(null);
-  const dueDatePickerRef = useRef<HTMLInputElement | null>(null);
   const artworkPdfInputRef = useRef<HTMLInputElement | null>(null);
   const artworkEnqueuePromiseRef = useRef<Promise<void> | null>(null);
   const campaignIdRef = useRef<string | null>(campaignId);
@@ -1477,9 +1466,6 @@ export function QuoteBuilderScreen({
     campaignIdRef.current = campaignId;
   }, [campaignId]);
 
-  useEffect(() => {
-    setDueDateInput(formatDateInputDisplay(values.dueDate));
-  }, [values.dueDate]);
 
   useEffect(() => {
     const jobsByBatch = new Map<string, typeof campaignArtworkUploadJobs>();
@@ -2031,9 +2017,9 @@ export function QuoteBuilderScreen({
   const hasPurchaseOrderNumber = values.purchaseOrderNumber.trim().length > 0;
   const showPurchaseOrderNumberRequired = purchaseOrderNumberSubmitAttempted && !hasPurchaseOrderNumber;
   const hasCampaignStartDate = values.campaignStartDate.trim().length > 0;
-  const hasDeliveryDueDate = values.dueDate.trim().length > 0;
+  const hasDeliveryDueDate = values.campaignMarkets.length > 0 && values.campaignMarkets.every((market) => Boolean(market.dueDate?.trim()));
   const isCampaignStartDatePast = hasCampaignStartDate && isDateBeforeToday(values.campaignStartDate);
-  const isDeliveryDueDatePast = hasDeliveryDueDate && isDateBeforeToday(values.dueDate);
+  const isDeliveryDueDatePast = values.campaignMarkets.some((market) => Boolean(market.dueDate) && isDateBeforeToday(market.dueDate));
   const hasValidCampaignStartDate = hasCampaignStartDate && !isCampaignStartDatePast;
   const hasValidDeliveryDueDate = hasDeliveryDueDate && !isDeliveryDueDatePast;
   const canAdvanceFromCreative = hasValidCampaignStartDate && hasValidDeliveryDueDate;
@@ -2236,8 +2222,8 @@ export function QuoteBuilderScreen({
       normalizedError.includes('campaign start date cannot be in the past')
       || normalizedError.includes('delivery due date cannot be in the past');
     const hasMissingDueDateActionError =
-      normalizedError.includes('add a due date before downloading visuals')
-      || normalizedError.includes('add a due date before sending email to ads');
+      normalizedError.includes('add a due date for each market before downloading visuals')
+      || normalizedError.includes('add a due date for each market before sending email to ads');
     const hasMissingPurchaseOrderNumberActionError = normalizedError.includes('enter a purchase order number');
     if (hasPastDateError && !isCampaignStartDatePast && !isDeliveryDueDatePast) {
       setError('');
@@ -2267,7 +2253,8 @@ export function QuoteBuilderScreen({
   const focusDueDateField = () => {
     setReviewDrawerOpen(false);
     window.setTimeout(() => {
-      const dueDateInput = document.getElementById('due-date') as HTMLInputElement | null;
+      const dateInputs = Array.from(document.querySelectorAll<HTMLInputElement>('[data-market-due-date]'));
+      const dueDateInput = dateInputs.find((input) => !input.value) ?? dateInputs[0];
       dueDateInput?.focus();
     }, 80);
   };
@@ -2448,11 +2435,9 @@ export function QuoteBuilderScreen({
 
   function updateCampaignStartDate(value: string) {
     if (isSubmittedCampaign) return;
-    const automaticDueDate = previousWednesday(value);
     setValues((current) => ({
       ...current,
       campaignStartDate: value,
-      ...(automaticDueDate ? { dueDate: automaticDueDate } : {}),
     }));
   }
 
@@ -4173,6 +4158,7 @@ export function QuoteBuilderScreen({
         deliveredTo: string;
         deliveredToName: string;
         rolled: boolean;
+        dueDate: string;
       }>();
       const creativeSummary = new Map<number, QuantityBreakdown>();
       const materialQuantitiesByCreative = new Map<number, Map<string, number>>();
@@ -4192,7 +4178,9 @@ export function QuoteBuilderScreen({
         if (!normalizedAddress) return;
         const state = stateHint ?? normalizeExportState(marketName);
         const heading = state ? `VIM ${state}` : `VIM ${marketName.trim().toUpperCase()}`;
-        const block = normalizedAddress.toUpperCase().startsWith('VIM ') ? normalizedAddress : `${heading}\n${normalizedAddress}`;
+        const addressBlock = normalizedAddress.toUpperCase().startsWith('VIM ') ? normalizedAddress : `${heading}\n${normalizedAddress}`;
+        const marketDueDate = values.campaignMarkets.find((market) => market.market === marketName)?.dueDate || '';
+        const block = `${addressBlock}\nDue Date: ${marketDueDate ? formatDocumentDate(marketDueDate) : '-'}`;
         if (seenDeliveryInfo.has(block)) return;
         seenDeliveryInfo.add(block);
         deliveryInfoBlocks.push(block);
@@ -4427,7 +4415,7 @@ export function QuoteBuilderScreen({
               );
               const deliveredTo = destination.fullAddress;
               const rolled = state !== 'NSW';
-              const deliveryKey = `${creativeCode}\x00${fileName}\x00${typeLabel}\x00${deliveredTo}`;
+              const deliveryKey = `${creativeCode}\x00${fileName}\x00${typeLabel}\x00${deliveredTo}\x00${market.dueDate}`;
               const existingDeliveryRow = deliveryRows.get(deliveryKey);
               if (existingDeliveryRow) {
                 existingDeliveryRow.quantity += assignment.quantity;
@@ -4440,6 +4428,7 @@ export function QuoteBuilderScreen({
                   quantity: assignment.quantity,
                   deliveredTo,
                   deliveredToName: destination.contactName,
+                  dueDate: market.dueDate,
                   rolled,
                 });
               }
@@ -4704,11 +4693,11 @@ export function QuoteBuilderScreen({
           return storedName ? buildPdfDownloadUrl(storedName, fileName) : '';
         };
 
-        const deliveryByDestination = new Map<string, { name: string; creativeMap: Map<number, Map<string, number>> }>();
+        const deliveryByDestination = new Map<string, { name: string; destination: string; dueDate: string; creativeMap: Map<number, Map<string, number>> }>();
         Array.from(deliveryRows.values()).forEach((row) => {
           const creativeNumber = getCreativeNumberFromCode(row.creativeCode);
-          const destinationKey = row.deliveredTo || 'DELIVERY';
-          const destinationBucket = deliveryByDestination.get(destinationKey) ?? { name: row.deliveredToName || destinationKey, creativeMap: new Map<number, Map<string, number>>() };
+          const destinationKey = `${row.state}|${row.dueDate}|${row.deliveredTo || 'DELIVERY'}`;
+          const destinationBucket = deliveryByDestination.get(destinationKey) ?? { name: row.deliveredToName || row.deliveredTo, destination: row.deliveredTo, dueDate: row.dueDate, creativeMap: new Map<number, Map<string, number>>() };
           const creativeBucket = destinationBucket.creativeMap.get(creativeNumber) ?? new Map<string, number>();
           const label = row.typeLabel;
           creativeBucket.set(label, (creativeBucket.get(label) ?? 0) + row.quantity);
@@ -4716,7 +4705,6 @@ export function QuoteBuilderScreen({
           deliveryByDestination.set(destinationKey, destinationBucket);
         });
 
-        const deadlineText = formatDeliveryDeadline(values.dueDate);
         const pdfDoc = await PDFDocument.create();
         pdfDoc.registerFontkit(fontkit);
         const pdfPageSize: [number, number] = purpose === 'installs' ? [841.89, 595.28] : [595.28, 841.89];
@@ -4799,7 +4787,20 @@ export function QuoteBuilderScreen({
         };
 
         const drawTitleBlock = (title: string, subtitle: string) => {
-          const h = 76;
+          const marketDates = values.campaignMarkets.map((market) => `${market.market}: ${market.dueDate ? formatDocumentDate(market.dueDate) : '-'}`).join(' | ');
+          const dateLines: string[] = [];
+          let dateLine = '';
+          for (const word of `Due Dates: ${marketDates}`.split(' ')) {
+            const candidate = dateLine ? `${dateLine} ${word}` : word;
+            if (dateLine && font.widthOfTextAtSize(candidate, 9.5) > maxWidth - 80) {
+              dateLines.push(dateLine);
+              dateLine = word;
+            } else {
+              dateLine = candidate;
+            }
+          }
+          if (dateLine) dateLines.push(dateLine);
+          const h = 76 + dateLines.length * 12;
           ensureSpace(h + 10);
           page.drawRectangle({
             x: marginX,
@@ -4835,14 +4836,17 @@ export function QuoteBuilderScreen({
             color: rgb(0.85, 0.9, 0.97),
           });
           const startLabel = values.campaignStartDate?.trim() ? formatDocumentDate(values.campaignStartDate) : '-';
-          const dueLabel = values.dueDate?.trim() ? formatDocumentDate(values.dueDate) : '-';
-          page.drawText(`Start Date: ${startLabel}    Due Date: ${dueLabel}`, {
+          page.drawText(`Start Date: ${startLabel}`, {
             x: titleTextX + (adsLogoImage ? 56 : 0),
             y: cursorY - 50,
             size: 9.5,
             font,
             color: rgb(0.85, 0.9, 0.97),
           });
+          dateLines.forEach((line, index) => page.drawText(line, {
+            x: titleTextX + (adsLogoImage ? 56 : 0), y: cursorY - 64 - index * 12,
+            size: 9.5, font, color: rgb(0.85, 0.9, 0.97),
+          }));
           cursorY -= (h + 10);
         };
 
@@ -5236,9 +5240,9 @@ export function QuoteBuilderScreen({
           drawWrappedLine('');
         }
         drawSectionHeader('Delivery Instructions');
-        Array.from(deliveryByDestination.entries()).sort((a, b) => a[0].localeCompare(b[0])).forEach(([destination, destinationEntry]) => {
+        Array.from(deliveryByDestination.entries()).sort((a, b) => a[0].localeCompare(b[0])).forEach(([, destinationEntry]) => {
           const destinationName = (destinationEntry.name || '').trim() || 'DELIVERY';
-          const fullDestination = (destination || '').trim();
+          const fullDestination = (destinationEntry.destination || '').trim();
           const fullLower = fullDestination.toLowerCase();
           const nameLower = destinationName.toLowerCase();
           const hasNamePrefix = Boolean(nameLower) && fullLower.startsWith(nameLower);
@@ -5249,7 +5253,7 @@ export function QuoteBuilderScreen({
             { text: '• Deliver to ' },
             { text: destinationName, isBold: true },
             { text: destinationRemainder ? `, ${destinationRemainder} by ` : ' by ' },
-            { text: deadlineText, isBold: true },
+            { text: formatDeliveryDeadline(destinationEntry.dueDate), isBold: true },
             { text: ' by COB:' },
           ],
             16,
@@ -5719,7 +5723,7 @@ export function QuoteBuilderScreen({
   async function downloadArtworkVisuals() {
     if (exportingTemplates || sendingAdsEmail) return false;
     if (!hasDeliveryDueDate) {
-      setReviewValidationError('Add a due date before downloading visuals.', { dueDate: true });
+      setReviewValidationError('Add a due date for each market before downloading visuals.', { dueDate: true });
       return false;
     }
     if (!hasMappedCreatives) {
@@ -5779,7 +5783,7 @@ export function QuoteBuilderScreen({
     const installDownloadStartedAt = performance.now();
     if (!hasDeliveryDueDate) {
       console.warn('[FlowIQ Installs Download]', installDownloadRequestId, 'blocked: missing due date', { campaignId, tenantId: effectiveTenantId });
-      setReviewValidationError('Add a due date before downloading the installation sheet.', { dueDate: true });
+      setReviewValidationError('Add a due date for each market before downloading the installation sheet.', { dueDate: true });
       return false;
     }
     if (!hasMappedCreatives) {
@@ -5971,7 +5975,7 @@ export function QuoteBuilderScreen({
   async function sendArtworkEmailToAds() {
     if (sendingAdsEmail || exportingTemplates) return false;
     if (!hasDeliveryDueDate) {
-      setReviewValidationError('Add a due date before sending email to ADS.', { dueDate: true });
+      setReviewValidationError('Add a due date for each market before sending email to ADS.', { dueDate: true });
       return false;
     }
     if (!hasUploadedPurchaseOrder) {
@@ -6171,7 +6175,7 @@ export function QuoteBuilderScreen({
           <div className="grid gap-4 lg:grid-cols-1 lg:items-start">
             <div className="space-y-7">
               <div className={cn('campaign-builder-top-form-scale space-y-4', TOP_FORM_THEME)}>
-                <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,320px)_minmax(0,226px)_minmax(0,226px)_minmax(0,136px)]">
+                <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,320px)_minmax(0,226px)_minmax(0,136px)]">
               <div className="flex h-11 w-full overflow-hidden rounded-lg border border-white/10 bg-slate-900/90">
                 <span className="inline-flex w-32 shrink-0 items-center whitespace-nowrap border-r border-white/10 px-3 text-xs font-semibold tracking-wide text-slate-300">Campaign Name</span>
                 <Input
@@ -6246,63 +6250,6 @@ export function QuoteBuilderScreen({
                     aria-label="Open start date picker"
                     className="absolute right-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-800 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-300/70"
                     onClick={() => openDatePicker(campaignStartPickerRef)}
-                    disabled={isSubmittedCampaign}
-                    type="button"
-                  >
-                    <CalendarDays className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-              <div className="flex h-11 min-w-0 w-full overflow-hidden rounded-lg border border-white/10 bg-slate-900/90">
-                <span className="inline-flex items-center whitespace-nowrap border-r border-white/10 px-3 text-xs font-semibold tracking-wide text-slate-300">Due Date</span>
-                <div className="relative min-w-0 flex-1">
-                  <Input
-                    className="h-11 w-full rounded-none border-0 bg-transparent px-2 pr-9 text-[13px] [&::-webkit-calendar-picker-indicator]:opacity-0"
-                    id="due-date"
-                    inputMode="numeric"
-                    placeholder="dd/mm/yyyy"
-                    type="text"
-                    value={dueDateInput}
-                    disabled={isSubmittedCampaign}
-                    onBlur={() => {
-                      if (!dueDateInput.trim()) {
-                        updateField('dueDate', '');
-                        setDueDateInput('');
-                        return;
-                      }
-                      const parsed = parseDisplayDateToIso(dueDateInput);
-                      if (parsed) {
-                        updateField('dueDate', parsed);
-                        setDueDateInput(formatDateInputDisplay(parsed));
-                        return;
-                      }
-                      setDueDateInput(formatDateInputDisplay(values.dueDate));
-                    }}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      setDueDateInput(nextValue);
-                      const parsed = parseDisplayDateToIso(nextValue);
-                      if (parsed) updateField('dueDate', parsed);
-                    }}
-                  />
-                  <input
-                    ref={dueDatePickerRef}
-                    className="pointer-events-none absolute h-0 w-0 opacity-0"
-                    min={minSelectableDate}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      updateField('dueDate', nextValue);
-                      setDueDateInput(formatDateInputDisplay(nextValue));
-                    }}
-                    tabIndex={-1}
-                    type="date"
-                    value={values.dueDate}
-                    disabled={isSubmittedCampaign}
-                  />
-                  <button
-                    aria-label="Open due date picker"
-                    className="absolute right-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-800 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-300/70"
-                    onClick={() => openDatePicker(dueDatePickerRef)}
                     disabled={isSubmittedCampaign}
                     type="button"
                   >
@@ -6547,6 +6494,18 @@ export function QuoteBuilderScreen({
                               disabled={isSubmittedCampaign}
                             />
                           </div>
+                          <label className="flex flex-col gap-1 text-xs text-slate-300">
+                            Due Date
+                            <Input
+                              data-market-due-date
+                              aria-label={`${market.market || 'Market'} due date`}
+                              type="date"
+                              min={minSelectableDate}
+                              value={market.dueDate || ''}
+                              disabled={isSubmittedCampaign}
+                              onChange={(event) => updateCampaignMarket(market.id, (current) => ({ ...current, dueDate: event.target.value }))}
+                            />
+                          </label>
                           {canRemoveMarket ? (
                             <Button disabled={isSubmittedCampaign} onClick={() => removeCampaignMarket(market.id)} size="icon" type="button" variant="ghost">
                               <X className="h-4 w-4" />
@@ -6697,6 +6656,20 @@ export function QuoteBuilderScreen({
                               {market.market || 'Market'}
                             </span>
                           </div>
+                        </div>
+                        <div className="px-4 py-3">
+                          <label className="flex max-w-xs flex-col gap-1 text-xs text-slate-300">
+                            Due Date
+                            <Input
+                              data-market-due-date
+                              aria-label={`${market.market || 'Market'} due date`}
+                              type="date"
+                              min={minSelectableDate}
+                              value={market.dueDate || ''}
+                              disabled={isSubmittedCampaign}
+                              onChange={(event) => updateCampaignMarket(market.id, (current) => ({ ...current, dueDate: event.target.value }))}
+                            />
+                          </label>
                         </div>
                         <Button
                           className="absolute right-[5.25rem] top-2 h-7 w-7 border border-violet-300/20 bg-slate-900/80 hover:bg-violet-500/10"
@@ -7371,44 +7344,59 @@ export function QuoteBuilderScreen({
           {draftMarket ? (
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3 text-[12px]">
               <div className="space-y-2.5">
-                <div className="flex h-7 w-full overflow-hidden rounded-md border border-slate-600 bg-slate-800">
-                  <span className="inline-flex w-28 shrink-0 items-center whitespace-nowrap border-r border-slate-600 px-2.5 text-[11px] font-semibold text-slate-300">Market</span>
-                  <div className="relative flex-1">
-                    <select
-                      className="h-7 w-full appearance-none border-0 bg-transparent px-2.5 pr-9 text-[12px] text-slate-50 focus:outline-none focus:ring-0"
-                      onChange={(event) =>
-                        updateDraftMarket((current) => {
-                          const value = event.target.value;
-                          const preferredAddress = preferredDeliveryAddressByMarket.get(value) || '';
-                          return {
-                            ...current,
-                            market: value,
-                            quantityOverrides: undefined,
-                            assets: current.assets.map((asset) => ({
-                              ...asset,
-                              assetId: '',
-                              assetSearch: '',
-                              deliveryAddress: preferredAddress,
-                              selectedWeeks: [],
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex h-8 w-full sm:w-[280px] overflow-hidden rounded-md border border-slate-600 bg-slate-800">
+                    <span className="inline-flex w-20 shrink-0 items-center whitespace-nowrap border-r border-slate-600 px-2.5 text-[11px] font-semibold text-slate-300">Market</span>
+                    <div className="relative min-w-0 flex-1">
+                      <select
+                        className="h-8 w-full appearance-none border-0 bg-transparent px-2.5 pr-9 text-[12px] text-slate-50 focus:outline-none focus:ring-0"
+                        onChange={(event) =>
+                          updateDraftMarket((current) => {
+                            const value = event.target.value;
+                            const preferredAddress = preferredDeliveryAddressByMarket.get(value) || '';
+                            return {
+                              ...current,
+                              market: value,
                               quantityOverrides: undefined,
-                            })),
-                          };
-                        })
-                      }
-                      value={draftMarket.market}
-                    >
-                      {Array.from(new Set([draftMarket.market, ...remainingMarketNames].filter(Boolean))).map((marketName) => (
-                        <option
-                          key={`draft-market-option-${marketName}`}
-                          value={marketName}
-                          style={{ backgroundColor: '#1e293b', color: '#f8fafc' }}
-                        >
-                          {marketName}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-400" />
+                              assets: current.assets.map((asset) => ({
+                                ...asset,
+                                assetId: '',
+                                assetSearch: '',
+                                deliveryAddress: preferredAddress,
+                                selectedWeeks: [],
+                                quantityOverrides: undefined,
+                              })),
+                            };
+                          })
+                        }
+                        value={draftMarket.market}
+                      >
+                        {Array.from(new Set([draftMarket.market, ...remainingMarketNames].filter(Boolean))).map((marketName) => (
+                          <option
+                            key={`draft-market-option-${marketName}`}
+                            value={marketName}
+                            style={{ backgroundColor: '#1e293b', color: '#f8fafc' }}
+                          >
+                            {marketName}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-400" />
+                    </div>
                   </div>
+
+                  <label className="flex h-8 w-full items-center overflow-hidden rounded-md border border-slate-600 bg-slate-800 sm:w-[240px]">
+                    <span className="inline-flex h-full shrink-0 items-center border-r border-slate-600 px-2.5 text-[11px] font-semibold text-slate-300">Due Date</span>
+                    <Input
+                      className="relative h-8 min-w-0 flex-1 rounded-none border-0 bg-transparent px-2.5 py-0 pr-8 text-[12px] [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-2 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                      aria-label={`${draftMarket.market || 'Market'} due date`}
+                      type="date"
+                      min={minSelectableDate}
+                      value={draftMarket.dueDate || ''}
+                      disabled={isSubmittedCampaign}
+                      onChange={(event) => updateDraftMarket((current) => ({ ...current, dueDate: event.target.value }))}
+                    />
+                  </label>
                 </div>
 
               <div className="space-y-2.5">

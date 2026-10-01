@@ -164,7 +164,7 @@ export function CampaignScheduleViewDialog({
     );
   }, [campaign]);
   const hasUploadedPurchaseOrder = Boolean((campaign?.purchaseOrder?.originalName || '').trim());
-  const hasDeliveryDueDate = Boolean((campaign?.values.dueDate || '').trim());
+  const hasDeliveryDueDate = Boolean(campaign?.values.campaignMarkets.length) && (campaign?.values.campaignMarkets.every((market) => Boolean(market.dueDate?.trim())) ?? false);
   const isSubmittedCampaign = (campaign?.status === 'submitted') || emailSubmitted;
   const isEditLockedByOtherUser = Boolean(editLockNotice.trim());
   const canCloneCampaign = campaign?.status === 'submitted';
@@ -177,7 +177,7 @@ export function CampaignScheduleViewDialog({
     if (action === 'download-visuals' || action === 'download-installs') {
       if (!hasDeliveryDueDate) {
         setActionSuccess('');
-        setActionError(action === 'download-installs' ? 'Add a due date before downloading the installation sheet.' : 'Add a due date before downloading visuals.');
+        setActionError(action === 'download-installs' ? 'Add a due date for each market before downloading the installation sheet.' : 'Add a due date for each market before downloading visuals.');
         return;
       }
       if (!hasMappedCreatives) {
@@ -188,7 +188,7 @@ export function CampaignScheduleViewDialog({
     } else {
       if (!hasDeliveryDueDate) {
         setActionSuccess('');
-        setActionError('Add a due date before sending email to ADS.');
+        setActionError('Add a due date for each market before sending email to ADS.');
         return;
       }
       if (!hasUploadedPurchaseOrder) {
@@ -865,14 +865,10 @@ export function CampaignScheduleViewDialog({
                     {editLockNotice}
                   </div>
                 ) : null}
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   <div className="rounded-lg border border-white/10 bg-slate-900/45 p-4">
                     <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Start Date</p>
                     <p className="mt-2 text-base font-semibold text-white">{formatCampaignDate(campaign.values.campaignStartDate)}</p>
-                  </div>
-                  <div className="rounded-lg border border-white/10 bg-slate-900/45 p-4">
-                    <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Due Date</p>
-                    <p className="mt-2 text-base font-semibold text-white">{formatCampaignDate(campaign.values.dueDate)}</p>
                   </div>
                   <div className="rounded-lg border border-white/10 bg-slate-900/45 p-4">
                     <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Weeks</p>
@@ -902,7 +898,7 @@ export function CampaignScheduleViewDialog({
                                   <span className="h-2 w-2 rounded-full bg-violet-300 shadow-[0_0_12px_rgba(145, 118, 224,0.65)]" />
                                   <p className="text-sm font-semibold uppercase tracking-[0.12em] text-violet-300">{market.market}</p>
                                 </div>
-                                <span className="text-xs text-slate-400">{market.assets.length} assets</span>
+                                <span className="text-xs text-slate-400">Due Date: {formatCampaignDate(market.dueDate)} | {market.assets.length} assets</span>
                               </div>
                               {market.assets.length === 0 ? (
                                 <p className="text-sm text-slate-400">No assets selected.</p>

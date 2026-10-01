@@ -26,6 +26,7 @@ export function createCampaignMarket(id: string, weekCount = 1): CampaignMarket 
   return {
     id,
     market: 'Sydney',
+    dueDate: '',
     assets: [createCampaignAsset(`asset-${id}-1`, weekCount)],
   };
 }
