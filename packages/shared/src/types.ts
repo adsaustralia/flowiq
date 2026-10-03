@@ -417,6 +417,7 @@ export type CampaignListItem = {
   latestQuoteAmount: number | string | null;
   updatedAt: string;
   createdAt: string;
+  submittedAt: string | null;
 };
 
 export type CampaignUpsertPayload = {

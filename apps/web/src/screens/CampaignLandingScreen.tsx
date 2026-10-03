@@ -445,7 +445,8 @@ export function CampaignLandingScreen({ onOpenCampaign, selectedTenantId, initia
         <section className="min-h-0 flex-1 overflow-auto rounded-md border border-white/10 bg-[#1a1733] shadow-[0_10px_24px_rgba(2,6,23,0.22)]">
           <table className="campaign-dashboard-table dense-table w-full border-collapse text-[10.5px]">
             <colgroup>
-              <col className="w-[35%]" />
+              <col className="w-[25%]" />
+              <col className="w-[10%]" />
               <col className="w-[10%]" />
               <col className="w-[10%]" />
               <col className="w-[6%]" />
@@ -461,6 +462,7 @@ export function CampaignLandingScreen({ onOpenCampaign, selectedTenantId, initia
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Campaign</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Created By</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Created At</th>
+                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Submitted At</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Markets</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Assets</th>
                 <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Start</th>
@@ -510,6 +512,7 @@ export function CampaignLandingScreen({ onOpenCampaign, selectedTenantId, initia
                   </td>
                   <td className="px-5 py-2.5 text-slate-300">{campaign.createdBy || 'N/A'}</td>
                   <td className="px-5 py-2.5 text-slate-300">{new Date(campaign.createdAt).toLocaleString('en-GB')}</td>
+                  <td className="px-5 py-2.5 text-slate-300">{campaign.submittedAt ? new Date(campaign.submittedAt).toLocaleString('en-GB') : 'N/A'}</td>
                   <td className="px-5 py-2.5 text-center font-semibold text-white">{campaign.marketCount}</td>
                   <td className="px-5 py-2.5 text-center font-semibold text-white">{campaign.assetCount}</td>
                   <td className="px-5 py-2.5 text-slate-300">{formatCampaignDate(campaign.campaignStartDate)}</td>

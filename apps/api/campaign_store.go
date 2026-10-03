@@ -228,6 +228,7 @@ type campaignListItem struct {
 	LatestQuoteAmount  any                   `json:"latestQuoteAmount"`
 	UpdatedAt          string                `json:"updatedAt"`
 	CreatedAt          string                `json:"createdAt"`
+	SubmittedAt        *string               `json:"submittedAt"`
 }
 
 func scanCampaignRow(scanner interface {
@@ -478,7 +479,7 @@ func (s *campaignStore) listCampaigns(ctx context.Context, user AuthUser) ([]cam
 		SELECT c.id, c.tenant_id, c.parent_campaign_id::text,
 			COALESCE(NULLIF(TRIM(parent.name), ''), NULLIF(TRIM(parent.form_data->>'campaignName'), ''), '') AS parent_campaign_name,
 			COALESCE(child_counts.child_count, 0) AS child_campaign_count,
-			c.status, c.form_data, c.purchase_order, c.latest_quote_amount::text, c.updated_at, c.created_at,
+			c.status, c.form_data, c.purchase_order, c.latest_quote_amount::text, c.updated_at, c.created_at, c.submitted_at,
 			COALESCE(NULLIF(TRIM(uc.name), ''), uc.email) AS created_by,
 			COALESCE(NULLIF(TRIM(uu.name), ''), uu.email) AS updated_by
 		FROM campaigns c
@@ -512,9 +513,10 @@ func (s *campaignStore) listCampaigns(ctx context.Context, user AuthUser) ([]cam
 		var latestQuoteAmount *string
 		var updatedAt time.Time
 		var createdAt time.Time
+		var submittedAt *time.Time
 		var createdBy string
 		var updatedBy string
-		if err := rows.Scan(&id, &tenantID, &parentCampaignID, &parentCampaignName, &childCampaignCount, &status, &formData, &purchaseOrderData, &latestQuoteAmount, &updatedAt, &createdAt, &createdBy, &updatedBy); err != nil {
+		if err := rows.Scan(&id, &tenantID, &parentCampaignID, &parentCampaignName, &childCampaignCount, &status, &formData, &purchaseOrderData, &latestQuoteAmount, &updatedAt, &createdAt, &submittedAt, &createdBy, &updatedBy); err != nil {
 			return nil, err
 		}
 
@@ -544,6 +546,11 @@ func (s *campaignStore) listCampaigns(ctx context.Context, user AuthUser) ([]cam
 			assetCount += len(market.Assets)
 		}
 
+		var submittedAtText *string
+		if submittedAt != nil {
+			formatted := submittedAt.UTC().Format(time.RFC3339)
+			submittedAtText = &formatted
+		}
 		items = append(items, campaignListItem{
 			ID:                 id,
 			TenantID:           tenantID,
@@ -563,6 +570,7 @@ func (s *campaignStore) listCampaigns(ctx context.Context, user AuthUser) ([]cam
 			LatestQuoteAmount:  quoteAmount,
 			UpdatedAt:          updatedAt.UTC().Format(time.RFC3339),
 			CreatedAt:          createdAt.UTC().Format(time.RFC3339),
+			SubmittedAt:        submittedAtText,
 		})
 	}
 
