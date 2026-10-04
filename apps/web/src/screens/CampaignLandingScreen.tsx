@@ -19,6 +19,18 @@ type CampaignLandingScreenProps = {
 };
 
 const LANDING_NOTICE_KEY = 'flowiq:landing-notice';
+const DASHBOARD_COLUMNS = [
+  { label: 'Campaign', width: undefined, minWidth: 100, centered: false },
+  { label: 'Created By', width: '10%', minWidth: 80, centered: false },
+  { label: 'Created At', width: '12%', minWidth: 80, centered: false },
+  { label: 'Submitted At', width: '12%', minWidth: 80, centered: false },
+  { label: 'Markets', width: '5%', minWidth: 64, centered: true },
+  { label: 'Assets', width: '5%', minWidth: 64, centered: true },
+  { label: 'Start', width: '9%', minWidth: 80, centered: false },
+  { label: 'Weeks', width: '5%', minWidth: 64, centered: true },
+  { label: 'Status', width: '130px', minWidth: 130, centered: true },
+  { label: 'Action', width: '270px', minWidth: 270, centered: true },
+];
 
 function formatCampaignDate(value: string) {
   if (!value) return 'TBC';
@@ -109,6 +121,20 @@ export function CampaignLandingScreen({ onOpenCampaign, selectedTenantId, initia
   const [downloadingPurchaseOrderId, setDownloadingPurchaseOrderId] = useState<string | null>(null);
   const [bottomBarHost, setBottomBarHost] = useState<HTMLElement | null>(null);
   const openedPreview = useRef<string | null>(null);
+  const dashboardTable = useRef<HTMLTableElement | null>(null);
+  const [columnWidths, setColumnWidths] = useState<number[] | null>(null);
+  const columnDrag = useRef<{ index: number; startX: number; widths: number[] } | null>(null);
+
+  function measuredColumnWidths() {
+    return Array.from(dashboardTable.current?.querySelectorAll('thead th') || []).map((header) => header.getBoundingClientRect().width);
+  }
+
+  function resizeColumn(index: number, widths: number[], delta: number) {
+    if (widths.length !== DASHBOARD_COLUMNS.length) return;
+    setColumnWidths(widths.map((width, columnIndex) => columnIndex === index
+      ? Math.max(DASHBOARD_COLUMNS[index].minWidth, width + delta)
+      : width));
+  }
   useEffect(() => {
     if (!initialPreviewCampaignId || (requiresTenantSelection && !selectedTenantId)) return;
     const key = `${selectedTenantId}:${initialPreviewCampaignId}`;
@@ -443,32 +469,50 @@ export function CampaignLandingScreen({ onOpenCampaign, selectedTenantId, initia
         </Card>
       ) : (
         <section className="min-h-0 flex-1 overflow-auto rounded-md border border-white/10 bg-[#1a1733] shadow-[0_10px_24px_rgba(2,6,23,0.22)]">
-          <table className="campaign-dashboard-table dense-table w-full border-collapse text-[10.5px]">
+          <table
+            ref={dashboardTable}
+            className="campaign-dashboard-table dense-table w-full border-collapse text-[10.5px]"
+            style={columnWidths ? { width: columnWidths.reduce((total, width) => total + width, 0), minWidth: 0 } : undefined}
+          >
             <colgroup>
-              <col className="w-[25%]" />
-              <col className="w-[10%]" />
-              <col className="w-[10%]" />
-              <col className="w-[10%]" />
-              <col className="w-[6%]" />
-              <col className="w-[6%]" />
-              <col className="w-[7%]" />
-              <col className="w-[7%]" />
-              <col className="w-[5%]" />
-              <col className="w-[7%]" />
-              <col className="w-[7%]" />
+              {DASHBOARD_COLUMNS.map((column, index) => (
+                <col key={column.label} style={{ width: columnWidths?.[index] ?? column.width }} />
+              ))}
             </colgroup>
             <thead>
               <tr className="bg-slate-950/65 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-slate-200">
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Campaign</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Created By</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Created At</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Submitted At</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Markets</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Assets</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-left backdrop-blur">Start</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Weeks</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Status</th>
-                <th className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 text-center backdrop-blur">Action</th>
+                {DASHBOARD_COLUMNS.map((column, index) => (
+                  <th key={column.label} scope="col" className={cn('sticky top-0 z-10 border-b border-white/10 bg-slate-950/82 px-5 py-2.5 backdrop-blur', column.centered ? 'text-center' : 'text-left')}>
+                    {column.label}
+                    <button
+                      type="button"
+                      className="campaign-column-resize"
+                      aria-label={`Resize ${column.label} column`}
+                      title="Drag to resize; use arrow keys to adjust; double-click to reset all columns"
+                      onPointerDown={(event) => {
+                        if (event.button !== 0) return;
+                        event.preventDefault();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        columnDrag.current = { index, startX: event.clientX, widths: measuredColumnWidths() };
+                      }}
+                      onPointerMove={(event) => {
+                        const drag = columnDrag.current;
+                        if (drag?.index === index) resizeColumn(index, drag.widths, event.clientX - drag.startX);
+                      }}
+                      onPointerUp={(event) => {
+                        columnDrag.current = null;
+                        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+                      }}
+                      onLostPointerCapture={() => { columnDrag.current = null; }}
+                      onDoubleClick={() => setColumnWidths(null)}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                        event.preventDefault();
+                        resizeColumn(index, measuredColumnWidths(), (event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 40 : 10));
+                      }}
+                    />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -526,7 +570,7 @@ export function CampaignLandingScreen({ onOpenCampaign, selectedTenantId, initia
                     </span>
                   </td>
                   <td className="px-5 py-2.5">
-                    <div className="flex justify-center gap-1.5">
+                    <div className="flex flex-nowrap justify-end gap-1.5 [&>*]:shrink-0">
                       <NavigationLink aria-label="View campaign" className={cn(buttonVariants({ variant: 'ghost' }), "h-7 w-7 rounded-md border border-white/10 p-0 text-slate-200", "aria-disabled:opacity-50")} href={navigationUrl('landing', { tenantId: selectedTenantId, previewCampaignId: campaign.id })} onNavigate={() => void handleOpenCampaignView(campaign.id)} title="View campaign">
                         <Eye className="h-3.5 w-3.5" />
                       </NavigationLink>

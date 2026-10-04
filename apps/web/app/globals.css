@@ -117,6 +117,8 @@ select option:checked {
 }
 
 .campaign-dashboard-table {
+  /* Keep the status and all seven actions readable; the section scrolls on smaller screens. */
+  min-width: 1300px;
   table-layout: fixed;
 }
 
@@ -128,8 +130,20 @@ select option:checked {
   white-space: nowrap;
 }
 
-.campaign-dashboard-table td:last-child {
-  overflow: visible;
+.campaign-column-resize {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.campaign-column-resize:hover,
+.campaign-column-resize:focus-visible {
+  background: rgba(167, 139, 250, 0.35);
+  outline: none;
 }
 
 .campaign-builder-content-scale {
